@@ -1,0 +1,33 @@
+[
+  {
+    "id": "parity_smoke",
+    "t": 0,
+    "libass": {
+      "minX": 98,
+      "minY": 127,
+      "maxX": 1496,
+      "maxY": 970,
+      "width": 1399,
+      "height": 844
+    },
+    "subframe": {
+      "minX": 102,
+      "minY": 126,
+      "maxX": 1497,
+      "maxY": 972,
+      "width": 1396,
+      "height": 847
+    },
+    "ratio": {
+      "w": 0.997855611150822,
+      "h": 1.0035545023696681
+    },
+    "delta": {
+      "w": -3,
+      "h": 3,
+      "x": 4,
+      "y": -1
+    },
+    "mismatch": false
+  }
+]

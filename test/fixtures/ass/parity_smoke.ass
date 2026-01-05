@@ -1,0 +1,21 @@
+[Script Info]
+Title: parity-smoke
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,54,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,100,100,40,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an7\pos(140,140)\bord3\shad2\blur1.2\be1\c&H00FF00&\alpha&H00&}Smoke Test
+Dialogue: 1,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an5\move(200,260,540,300,0,2000)\org(320,260)\frz30\frx10\fry-8\fax0.06\fay-0.04\t(0,2000,\fscx120\fscy120\frz0)}Move/Rotate
+Dialogue: 2,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an2\pos(960,960)\k20}Ka{\k20}ra{\k20}o{\k20}ke
+Dialogue: 3,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an8\pos(960,120)\clip(860,80,1060,160)}Clipped Text
+Dialogue: 4,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an9\pos(1820,120)\fad(200,200)\q2}Wrap\NTest
+Dialogue: 5,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an7\pos(200,520)}ABC שלום 123 مرحبا XYZ
+Dialogue: 6,0:00:00.00,0:00:03.00,Default,,0,0,0,,{\an1\pos(160,980)\fs72\q0}这是一个没有空格的中文长句子用于测试自动换行是否正确

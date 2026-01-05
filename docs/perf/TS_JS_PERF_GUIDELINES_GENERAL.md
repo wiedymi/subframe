@@ -1,75 +1,57 @@
 # TS/JS Performance Guidelines (General)
 
-Source: ts_js_performance_cheatsheet.pdf (2025-12-30)
+This document summarizes the general (engine-agnostic) performance guidance from the project performance cheat sheets. Always validate changes with real workloads and profilers.
 
-## Principles
-- Predictable code is fast code: stable object shapes, dense arrays, consistent types.
-- Measure on real workloads; avoid overfitting to microbenchmarks.
-- Use the simplest structure that matches semantics, then verify with a profiler.
+## 1) Measure correctly
+- Prefer macro profiling over microbenchmarks; confirm wins at the frame/RPS level.
+- Warm up JITs before timing; run multiple samples and report median/p95.
+- Keep outputs alive (sink variables) to avoid dead-code elimination.
+- Benchmark on target devices/browsers; results vary across engines.
 
-## Measuring correctly
-- Warm up the JIT.
-- Use realistic input sizes and the same process for comparisons.
-- Keep outputs alive to avoid dead-code elimination.
-- Use profilers for final decisions; microbenchmarks only validate single changes.
+## 2) Object shapes and property access
+- Initialize objects with all properties upfront; keep insertion order consistent.
+- Avoid `delete` on hot objects; it can push shapes into slow dictionary mode.
+- Keep call sites monomorphic (same shapes/types); avoid megamorphic sites.
 
-## Objects and classes
-- Initialize properties up front in a fixed order.
-- Avoid delete in hot code; use sentinel values or rebuild off the hot path.
-- Avoid dynamic property keys in hot loops; specialize by key or use Map.
-- Prefer Map for large, dynamic key sets; use objects for small fixed fields.
-- Class fields are generally fine, but constructor assignments are the most predictable.
-- Avoid Proxy in hot paths; keep it at boundaries.
+## 3) Arrays and iteration
+- Keep arrays dense; avoid holes and mixed element types.
+- Prefer numeric arrays (or typed arrays) for hot numeric loops.
+- Use indexed `for` loops in hot paths; avoid allocating intermediate arrays.
+- Cache `length` in tight loops when it helps readability and avoids re-reads.
 
-## Arrays
-- Prefer indexed for/for...of in hot loops over callback-based iteration.
-- Avoid holes (delete or sparse indices) in hot arrays.
-- Preallocate arrays when size is known, but validate downstream performance.
-- Keep arrays type-consistent; use typed arrays for numeric-heavy work.
-- Do not read past array.length in hot loops.
+## 4) Functions and control flow
+- Avoid creating closures in tight loops.
+- Keep call sites predictable; avoid dynamic function dispatch in hot paths.
+- Avoid `try/catch` inside hot loops (use at boundaries if possible).
 
-## Strings and text
-- Choose join vs += based on workload shape; preallocate arrays when joining many parts.
-- Prefer the API with correct semantics (slice vs substring), then measure if it matters.
-- Use TextDecoder or Buffer.toString for UTF-8 decoding; reuse decoders.
-- Compile RegExp once when used repeatedly.
+## 5) Strings and text
+- Avoid repeated concatenation in large loops; batch into arrays and `join`.
+- Prefer slicing over regex when parsing is simple and hot.
+- Minimize per-iteration allocations when building strings.
 
-## Functions and control flow
-- Avoid per-iteration closure creation in hot code; hoist callbacks.
-- Avoid repeated bind/apply in hot paths; bind once or call directly.
-- Do not use exceptions for normal control flow; use error-returning APIs.
+## 6) Memory and GC
+- Reduce allocation rate in hot paths; reuse buffers and objects.
+- Pool frequently created objects (but keep pool logic simple and fast).
+- Avoid short-lived large allocations in per-frame code.
 
-## Memory and GC
-- Avoid intermediate arrays in hot pipelines; use single-pass loops.
-- Reuse large buffers when safe; be careful with allocUnsafe.
-- Avoid unbounded caches and accidental retention.
+## 7) Binary data and buffers
+- Prefer `Uint8Array`/`Float32Array` over JS arrays for large numeric data.
+- Avoid creating many small `DataView` wrappers in hot loops.
+- Reuse buffer views where possible.
 
-## Binary data and parsing
-- Use TypedArray views for bulk numeric reads; DataView for endianness or unaligned fields.
-- Use bulk copies (TypedArray.set, Buffer.copy) instead of per-byte loops.
-- Avoid repeated buffer concatenation; parse incrementally with a cursor or ring buffer.
+## 8) Web performance (DOM + main thread)
+- Batch DOM changes; avoid forced reflow/relayout in loops.
+- Use `requestAnimationFrame` for UI updates; minimize work per frame.
+- Avoid excessive event handlers or per-event allocations.
 
-## Web performance (DOM)
-- Separate layout reads from writes to avoid layout thrash.
-- Batch DOM inserts with DocumentFragment.
-- Prefer transform/opacity for animations and schedule with requestAnimationFrame.
+## 9) WebGL/WebGPU
+- Batch draw calls; minimize CPU→GPU sync points.
+- Reuse pipelines/shaders and bind groups where possible.
+- Upload buffers in large chunks rather than many small calls.
 
-## WebGL
-- Batch draw calls and minimize state changes.
-- Avoid readPixels and getError in the frame loop.
-
-## WebGPU
-- Create resources once and update buffers instead of recreating.
-- Cache pipelines and bind groups; reuse layouts.
-- Consider render bundles for repeated static draws.
-- Use queue.writeBuffer for small updates; map buffers for large streaming only when needed.
-
-## TypeScript notes
-- Runtime performance depends on emitted JS, not TS types.
-- useDefineForClassFields is a correctness choice, not a direct perf knob.
-- Build-time performance: use incremental builds and project references in large repos.
-
-## Sample trend hints (do not treat as universal)
-- Callback-based loops can be much slower than indexed loops in hot paths.
-- Dynamic property keys and delete can severely slow property access.
-- Preallocation can help large array builds; test for your usage.
+## 10) Practical checklist for hot paths
+- Algorithmic wins first (big‑O, data layout).
+- Stable object shapes; dense arrays; no `delete`.
+- Avoid per-iteration allocations (closures, temporary arrays).
+- Monomorphic access patterns; predictable branches.
+- Profile, don’t guess.

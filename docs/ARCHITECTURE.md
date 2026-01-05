@@ -1,8 +1,8 @@
 # Architecture overview
 
 ## Pipeline (libass-aligned)
-1) Parse ASS events (Subforge)
-2) Resolve styles and tags into style runs
+1) Parse input into Subforge `SubtitleDocument` (any supported format)
+2) Render **directly from Subforge events/segments** (no extra abstraction layer)
 3) Shape runs with text-shaper (glyphs, metrics)
 4) Layout: positioning, wrapping, margins, alignment
 5) Karaoke timing and segment splitting
@@ -13,46 +13,46 @@
 10) Post-raster filters: outline, blur, shadow
 11) Composite bitmaps into frame (WebGL / Canvas2D)
 
-## Core modules
-- `core/ass`: glue to Subforge parsing and event normalization
-- `core/tags`: tag parser and per-event tag state machine
-- `core/style`: style resolution (ASS style + tags -> computed style)
-- `core/shape`: wrapper over text-shaper; returns glyph runs
-- `core/layout`: line breaking, wrapping, alignment, margins, karaoke
-- `core/transform`: 2D/3D transforms, timing, fixed-point math
-- `core/raster`: glyph outline to bitmap (text-shaper or libass port)
-- `core/filters`: outline/blur/shadow filters on alpha bitmaps
-- `core/composite`: backend-agnostic compositor API
-- `backend/webgl`: texture atlas + quad compositor
-- `backend/canvas`: debug backend for inspection
+## Core modules (current)
+- `core/pipeline.ts`: thin frame-level orchestrator
+- `core/pipeline/event.ts`: per-event orchestration
+- `core/layout/*`: shaping + layout + positioning
+- `core/raster/*`: glyph raster + filters + layer output
+- `core/render.ts`: public API for `SubtitleDocument` rendering
+- `core/trace.ts`: trace schema + helpers for debug visibility
+- `core/data/types.ts`: shared data types
+- `core/math/fixed.ts`: fixed-point helpers (1/64 px)
+- `io/fonts/*`: font discovery + caching (Bun + browser-compatible)
 
-## Folder structure (proposed)
+## Folder structure (current)
 ```
 src/
   core/
-    ass/         # Subforge integration, event normalization, time slicing
-    tags/        # tag parser, tag state machine, tag interpolation (\t, \fad)
-    style/       # style resolution, defaults, computed style structs
-    shape/       # text-shaper adapter, glyph run assembly, metrics
-    layout/      # line breaking, wrapping, margins, alignment, karaoke
-    transform/   # 2D/3D transforms, fixed-point math, bbox transforms
-    raster/      # outline -> bitmap rasterizer (text-shaper or libass port)
-    filters/     # outline/blur/shadow filters on alpha bitmaps
-    composite/   # backend-agnostic compositor API + render item assembly
-    math/        # fixed-point types, matrices, rounding utilities
-    data/        # core data types (FrameContext, GlyphRun, BitmapLayer, etc.)
-  backend/
-    webgl/       # atlas, batching, quad renderer (WebGL2 if available)
-    canvas/      # debug renderer, quick visual checks
+    pipeline.ts         # frame orchestrator
+    pipeline/           # per-event pipeline
+    render.ts           # top-level render API
+    trace.ts            # trace schema + builders
+    animate/            # fade/move/transform logic
+    clip/               # clip parsing + application
+    filters/            # blur helpers
+    layout/             # line building + layout
+    raster/             # glyph raster + bitmap utils
+    shape/              # shaping helpers
+    style/              # color + font style resolution
+    tags/               # tag parsing + effect helpers
+    transform/          # matrix + affine helpers
+    math/               # fixed-point utilities
+    data/               # core data types (FrameContext, BitmapLayer, etc.)
   io/
     fonts/       # font discovery/loading glue (browser + Bun)
-    assets/      # texture/glyph cache IO helpers
-  tools/
-    trace/       # trace schema + emitters
-    diff/        # image diff helpers (dev only)
-  test/
-    fixtures/    # ASS samples, fonts, expected outputs
-    harness/     # libass comparison harness
+test/
+  fixtures/    # ASS samples + expected outputs (parity focus)
+  harness/     # libass comparison harness
+tools/
+  trace/       # trace emitters
+  diff/        # image diff helpers (dev only)
+  bench/       # micro + fixture benchmarks
+  ref/         # libass + subframe reference renderers
 docs/
   GOALS.md
   ARCHITECTURE.md
@@ -61,22 +61,22 @@ docs/
 ```
 
 Notes:
-- `core/data` holds pure data types with no side effects.
-- `core/math` contains fixed-point math utilities used across modules.
+- Rendering operates on Subforge `SubtitleDocument` directly; avoid creating intermediate run/segment layers.
 - `tools/*` are dev-only and excluded from production bundles.
 
 ## Data model (initial)
 - `Fixed26_6`: signed 26.6 fixed point (1/64 px) for all geometry
 - `FrameContext`: time, viewport, margins, styles, fonts
-- `EventContext`: parsed event, resolved style state, timing
+- `SubtitleDocument`: Subforge document (format-agnostic input)
+- `SubtitleEvent`: Subforge event (timing + segments + style refs)
 - `GlyphRun`: glyph ids, advances, offsets, font face, features
 - `LayoutLine`: positioned glyphs, line metrics, alignment
 - `BitmapLayer`: alpha bitmap + origin + size + color + z
 - `RenderItem`: final composited quad (texture + transform + color)
 
-## Backend boundary
-- Core produces `BitmapLayer[]` per frame.
-- Backends handle atlas placement and compositing only.
+## Backend boundary (planned)
+- Core already produces `BitmapLayer[]` per frame.
+- Future backends will handle atlas placement and compositing only.
 - No layout or filter logic in backend code.
 
 ## Determinism rules
@@ -85,6 +85,15 @@ Notes:
 - All randomness disabled; explicit seeds if ever needed.
 
 ## Notes on parity
+- Full ASS spec rendering is the parity target.
+- Other formats are rendered through Subforge conversion; parity is not guaranteed outside ASS/SSA.
 - Apply 3D transforms before rasterization to match libass.
 - Outline/blur/shadow are bitmap filters post-raster.
 - Subpixel rounding must match libass at each stage.
+
+## Browser runtime notes
+- Font loading in browser requires a URL (http/https/data/blob). The renderer does not auto-resolve system fonts outside Bun.
+
+## Implementation preference
+- Before implementing new bitmap/text shaping (or related) operations, check `refs/text-shaper` for a ready-to-use solution.
+- Before introducing new interfaces or abstraction layers, check `refs/subforge` and reuse existing Subforge data types/systems where possible.

@@ -1,0 +1,30 @@
+{
+  "viewport": { "width": 1920, "height": 1080 },
+  "threshold": { "max": 2, "mean": 0.5, "pct": 0.1 },
+  "renderers": {
+    "libass": { "cmd": ["/usr/bin/env", "DYLD_LIBRARY_PATH=refs/libass/libass/.libs", "tools/ref/render_libass"] },
+    "subframe": { "cmd": ["bun", "run", "tools/ref/render_subframe.ts"] }
+  },
+  "cases": [
+    {
+      "id": "parity_smoke",
+      "ass": "test/fixtures/ass/parity_smoke.ass",
+      "timestampsMs": [0, 1000, 2000]
+    },
+    {
+      "id": "aot3p2_op",
+      "ass": "test/fixtures/ass/aot3p2_op.ass",
+      "timestampsMs": [0, 15000, 30000]
+    },
+    {
+      "id": "benchmark",
+      "ass": "test/fixtures/ass/benchmark.ass",
+      "timestampsMs": [0, 20000, 40000]
+    },
+    {
+      "id": "railgun_op",
+      "ass": "test/fixtures/ass/railgun_op.ass",
+      "timestampsMs": [0, 12000, 24000]
+    }
+  ]
+}

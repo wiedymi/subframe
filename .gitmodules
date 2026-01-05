@@ -1,0 +1,9 @@
+[submodule "refs/subforge"]
+	path = refs/subforge
+	url = https://github.com/wiedymi/subforge.git
+[submodule "refs/text-shaper"]
+	path = refs/text-shaper
+	url = https://github.com/wiedymi/text-shaper.git
+[submodule "refs/libass"]
+	path = refs/libass
+	url = https://github.com/libass/libass.git

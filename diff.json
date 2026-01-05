@@ -1,0 +1,9 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "maxError": 255,
+  "meanError": 0.024636381172839505,
+  "pixelsOver": 290,
+  "pctOver": 0.01398533950617284,
+  "tolerance": 1
+}

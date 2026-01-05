@@ -4,18 +4,22 @@
 - `tools/render_ref`: render a specific time/event with libass to PNG.
 - `tools/render_subframe`: render the same input with subframe to PNG.
 - `tools/diff`: pixel diff with heatmap + summary stats.
-- `tools/trace`: dump JSON trace of pipeline stages for one event/time.
+- `tools/diff/bbox_compare.ts`: compare libass vs subframe bounding boxes and flag size mismatches.
+- `tools/trace/render_trace.ts`: dump JSON trace of layout decisions for one frame.
+- `tools/trace/trace_diff.ts`: compare two trace JSONs and show first mismatch.
+- `tools/trace/move_rotate_diff.ts`: per-layer diff report for a targeted event (useful for Move/Rotate).
 - `tools/repro`: bundle ASS + fonts + config + trace into a zip.
-- `tools/bench`: micro-benchmarks for shaping, raster, filters.
+- `tools/bench/bench_basic.ts`: micro-benchmarks for shaping and raster.
+- `tools/bench/bench_fixtures.ts`: end-to-end frame timing over fixtures.
 
 ### Trace content (v1)
 - Inputs: ASS event, resolved style, tag timeline.
-- Shaping: glyph ids, advances, offsets, font size.
-- Layout: line breaks, alignment, margins, karaoke segments.
-- Transform: matrices, origins, fixed-point rounding points.
-- Raster: glyph paths or bitmap bounds.
-- Filters: blur/outline/shadow params and output bounds.
-- Composite: final quads and atlas coords.
+- Shaping: per-item font size, spacing, synthetic bold/italic.
+- Layout: line breaks, alignment, margins, block anchor, karaoke segments.
+- Transform: rotate/shear/origin values per item.
+- Raster: bitmap layer bounds (origin + width/height).
+- Filters: outline/blur/shadow params (including x/y overrides).
+- Composite: final layer order with z, colors, and clip type.
 
 ## For the human (visual tools)
 - Debug viewer (web) with frame scrubber and timeline.

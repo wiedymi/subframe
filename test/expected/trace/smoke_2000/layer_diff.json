@@ -1,0 +1,196 @@
+{
+  "event": 0,
+  "kind": "fill",
+  "layers": [
+    {
+      "index": 26,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 373,
+      "originY": 151,
+      "width": 40,
+      "height": 45,
+      "stats": {
+        "x": 373,
+        "y": 151,
+        "width": 40,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 152.51,
+        "pixelsOver": 1741
+      }
+    },
+    {
+      "index": 14,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 271,
+      "originY": 151,
+      "width": 43,
+      "height": 45,
+      "stats": {
+        "x": 271,
+        "y": 151,
+        "width": 43,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 146.54935400516797,
+        "pixelsOver": 1839
+      }
+    },
+    {
+      "index": 17,
+      "text": " ",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 301,
+      "originY": 181,
+      "width": 15,
+      "height": 15,
+      "stats": {
+        "x": 301,
+        "y": 181,
+        "width": 15,
+        "height": 15,
+        "maxError": 254,
+        "meanError": 139.68,
+        "pixelsOver": 201
+      }
+    },
+    {
+      "index": 29,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 399,
+      "originY": 142,
+      "width": 31,
+      "height": 54,
+      "stats": {
+        "x": 399,
+        "y": 142,
+        "width": 31,
+        "height": 54,
+        "maxError": 255,
+        "meanError": 135.70071684587813,
+        "pixelsOver": 1325
+      }
+    },
+    {
+      "index": 8,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 214,
+      "originY": 151,
+      "width": 44,
+      "height": 45,
+      "stats": {
+        "x": 214,
+        "y": 151,
+        "width": 44,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 134.8378787878788,
+        "pixelsOver": 1918
+      }
+    },
+    {
+      "index": 23,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 343,
+      "originY": 151,
+      "width": 43,
+      "height": 45,
+      "stats": {
+        "x": 343,
+        "y": 151,
+        "width": 43,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 129.24651162790698,
+        "pixelsOver": 1871
+      }
+    },
+    {
+      "index": 5,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 171,
+      "originY": 151,
+      "width": 55,
+      "height": 45,
+      "stats": {
+        "x": 171,
+        "y": 151,
+        "width": 55,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 124.58868686868686,
+        "pixelsOver": 2341
+      }
+    },
+    {
+      "index": 20,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 316,
+      "originY": 141,
+      "width": 47,
+      "height": 55,
+      "stats": {
+        "x": 316,
+        "y": 141,
+        "width": 47,
+        "height": 55,
+        "maxError": 255,
+        "meanError": 117.60618955512572,
+        "pixelsOver": 2219
+      }
+    },
+    {
+      "index": 11,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 246,
+      "originY": 141,
+      "width": 40,
+      "height": 55,
+      "stats": {
+        "x": 246,
+        "y": 141,
+        "width": 40,
+        "height": 55,
+        "maxError": 255,
+        "meanError": 104.54181818181819,
+        "pixelsOver": 1863
+      }
+    },
+    {
+      "index": 2,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 134,
+      "originY": 140,
+      "width": 48,
+      "height": 57,
+      "stats": {
+        "x": 134,
+        "y": 140,
+        "width": 48,
+        "height": 57,
+        "maxError": 255,
+        "meanError": 84.01206140350877,
+        "pixelsOver": 2127
+      }
+    }
+  ]
+}

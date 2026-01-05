@@ -1,0 +1,215 @@
+{
+  "event": 1,
+  "kind": "fill",
+  "layers": [
+    {
+      "index": 38,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 453,
+      "originY": 282,
+      "width": 47,
+      "height": 45,
+      "stats": {
+        "x": 453,
+        "y": 282,
+        "width": 47,
+        "height": 45,
+        "maxError": 255,
+        "meanError": 170.2113475177305,
+        "pixelsOver": 1671
+      }
+    },
+    {
+      "index": 50,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 615,
+      "originY": 277,
+      "width": 57,
+      "height": 49,
+      "stats": {
+        "x": 615,
+        "y": 277,
+        "width": 57,
+        "height": 49,
+        "maxError": 255,
+        "meanError": 167.97422126745434,
+        "pixelsOver": 2228
+      }
+    },
+    {
+      "index": 53,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 657,
+      "originY": 263,
+      "width": 43,
+      "height": 62,
+      "stats": {
+        "x": 657,
+        "y": 263,
+        "width": 43,
+        "height": 62,
+        "maxError": 255,
+        "meanError": 167.08064516129033,
+        "pixelsOver": 2052
+      }
+    },
+    {
+      "index": 32,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 359,
+      "originY": 271,
+      "width": 58,
+      "height": 57,
+      "stats": {
+        "x": 359,
+        "y": 271,
+        "width": 58,
+        "height": 57,
+        "maxError": 255,
+        "meanError": 162.93163944343618,
+        "pixelsOver": 2502
+      }
+    },
+    {
+      "index": 35,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 414,
+      "originY": 283,
+      "width": 47,
+      "height": 46,
+      "stats": {
+        "x": 414,
+        "y": 283,
+        "width": 47,
+        "height": 46,
+        "maxError": 255,
+        "meanError": 157.918131359852,
+        "pixelsOver": 1697
+      }
+    },
+    {
+      "index": 56,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 686,
+      "originY": 275,
+      "width": 61,
+      "height": 50,
+      "stats": {
+        "x": 686,
+        "y": 275,
+        "width": 61,
+        "height": 50,
+        "maxError": 255,
+        "meanError": 148.3711475409836,
+        "pixelsOver": 2327
+      }
+    },
+    {
+      "index": 62,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 761,
+      "originY": 273,
+      "width": 66,
+      "height": 51,
+      "stats": {
+        "x": 761,
+        "y": 273,
+        "width": 66,
+        "height": 51,
+        "maxError": 255,
+        "meanError": 141.93553178847296,
+        "pixelsOver": 2308
+      }
+    },
+    {
+      "index": 41,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 492,
+      "originY": 280,
+      "width": 50,
+      "height": 48,
+      "stats": {
+        "x": 492,
+        "y": 280,
+        "width": 50,
+        "height": 48,
+        "maxError": 255,
+        "meanError": 120.82541666666667,
+        "pixelsOver": 1585
+      }
+    },
+    {
+      "index": 59,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 730,
+      "originY": 261,
+      "width": 47,
+      "height": 63,
+      "stats": {
+        "x": 730,
+        "y": 261,
+        "width": 47,
+        "height": 63,
+        "maxError": 255,
+        "meanError": 106.56332320162107,
+        "pixelsOver": 1686
+      }
+    },
+    {
+      "index": 47,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 557,
+      "originY": 264,
+      "width": 69,
+      "height": 62,
+      "stats": {
+        "x": 557,
+        "y": 264,
+        "width": 69,
+        "height": 62,
+        "maxError": 255,
+        "meanError": 91.65147265077138,
+        "pixelsOver": 2297
+      }
+    },
+    {
+      "index": 44,
+      "text": "Move/Rotate",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "originX": 529,
+      "originY": 265,
+      "width": 38,
+      "height": 62,
+      "stats": {
+        "x": 529,
+        "y": 265,
+        "width": 38,
+        "height": 62,
+        "maxError": 255,
+        "meanError": 78.98514431239389,
+        "pixelsOver": 1142
+      }
+    }
+  ]
+}

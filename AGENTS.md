@@ -1,7 +1,7 @@
 # Agent guide for subframe
 
 ## Role
-You are a coding agent working in this repo. Your job is to help design and implement a WebGL-first ASS/SSA subtitle renderer targeting libass visual parity for web and Bun.
+You are a coding agent working in this repo. Your job is to help design and implement a WebGL-first subtitle renderer that **directly renders Subforge `SubtitleDocument`** and targets libass visual parity for ASS/SSA on web and Bun.
 
 ## Primary goals
 - 1:1 visual parity with libass for supported tags/features.
@@ -19,20 +19,24 @@ You are a coding agent working in this repo. Your job is to help design and impl
 - Apply 3D transforms before rasterization (libass parity).
 - Outline/blur/shadow are bitmap filters post-raster (vsfilter-style).
 - Backend only composites bitmaps; core handles layout/raster/filter.
+- Renderer consumes Subforge `SubtitleDocument` as the **single source of truth** for all formats.
+- **Do not introduce extra abstraction layers** (no custom run/segment models). Render Subforge events/segments directly.
+- Format support comes from Subforge; parity is targeted for ASS/SSA via libass behavior.
 
-## References (local)
-- Subforge: /Users/uyakauleu/vivy/experiments/subforge
-- text-shaper: /Users/uyakauleu/vivy/experiments/text-shaper
-- libass: /tmp/libass
-  - /tmp/libass/libass/ass_render.c
-  - /tmp/libass/libass/ass_bitmap_engine.c
-  - /tmp/libass/libass/ass_rasterizer.c
-  - /tmp/libass/libass/ass_font.c
+## References
+- Subforge: `refs/subforge`
+- text-shaper: `refs/text-shaper`
+- libass: `refs/libass`
+  - `refs/libass/libass/ass_render.c`
+  - `refs/libass/libass/ass_bitmap_engine.c`
+  - `refs/libass/libass/ass_rasterizer.c`
+  - `refs/libass/libass/ass_font.c`
 
 ## Repo docs to follow
 - docs/GOALS.md
 - docs/ARCHITECTURE.md
 - docs/DEBUG_TOOLS.md
+- docs/perf.md
 - docs/perf/TS_JS_PERF_GUIDELINES_BUN_CHROME_SAFARI.md
 - docs/perf/TS_JS_PERF_GUIDELINES_GENERAL.md
 
@@ -41,6 +45,17 @@ You are a coding agent working in this repo. Your job is to help design and impl
 - Keep core math deterministic and fixed-point; avoid float drift.
 - Avoid accidental allocations in hot loops.
 - Make debugability a first-class feature; every stage should be inspectable.
+- Before implementing new bitmap/text shaping (or related) operations, check `refs/text-shaper` for a ready-to-use solution.
+- Before introducing new interfaces or abstraction layers, check `refs/subforge` and reuse existing Subforge data types/systems where possible.
+
+## Performance checklist (follow docs/perf.md and docs/perf/*.md)
+- Algorithmic wins first; avoid O(n^2) where possible.
+- Keep shapes stable; avoid `delete`, avoid polymorphic options objects in hot paths.
+- Keep arrays dense and monomorphic; prefer TypedArray for numeric kernels.
+- Hot loops: prefer `for`/`while` over `for...of`, `map`, `forEach`, `reduce` when profiling shows heat.
+- Avoid per-iteration closures, spreads, and destructuring in hot paths.
+- Minimize allocations; reuse buffers/objects when safe.
+- Avoid CPU↔GPU sync in render loops (no readbacks in hot path).
 
 ## Debug tooling expectations
 Planned tools (build when asked):

@@ -1,0 +1,396 @@
+{
+  "event": 0,
+  "kind": "fill",
+  "layers": [
+    {
+      "index": 29,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 3,
+      "glyphId": 87,
+      "originX": 314,
+      "originY": 113,
+      "width": 28,
+      "height": 47,
+      "libass": {
+        "minX": 314,
+        "minY": 118,
+        "maxX": 320,
+        "maxY": 155,
+        "width": 7,
+        "height": 38
+      },
+      "subframe": {
+        "minX": 314,
+        "minY": 119,
+        "maxX": 338,
+        "maxY": 157,
+        "width": 25,
+        "height": 39
+      },
+      "ratio": {
+        "w": 3.5714285714285716,
+        "h": 1.0263157894736843
+      },
+      "delta": {
+        "w": 18,
+        "h": 1,
+        "x": 0,
+        "y": 1
+      },
+      "mismatch": true
+    },
+    {
+      "index": 17,
+      "text": " ",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 0,
+      "glyphId": 3,
+      "originX": 235,
+      "originY": 145,
+      "width": 15,
+      "height": 15,
+      "libass": {
+        "minX": 243,
+        "minY": 145,
+        "maxX": 249,
+        "maxY": 155,
+        "width": 7,
+        "height": 11
+      },
+      "subframe": {
+        "minX": 235,
+        "minY": 145,
+        "maxX": 244,
+        "maxY": 157,
+        "width": 10,
+        "height": 13
+      },
+      "ratio": {
+        "w": 1.4285714285714286,
+        "h": 1.1818181818181819
+      },
+      "delta": {
+        "w": 3,
+        "h": 2,
+        "x": -8,
+        "y": 0
+      },
+      "mismatch": true
+    },
+    {
+      "index": 26,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 2,
+      "glyphId": 86,
+      "originX": 293,
+      "originY": 120,
+      "width": 36,
+      "height": 40,
+      "libass": {
+        "minX": 293,
+        "minY": 120,
+        "maxX": 320,
+        "maxY": 156,
+        "width": 28,
+        "height": 37
+      },
+      "subframe": {
+        "minX": 293,
+        "minY": 120,
+        "maxX": 328,
+        "maxY": 157,
+        "width": 36,
+        "height": 38
+      },
+      "ratio": {
+        "w": 1.2857142857142858,
+        "h": 1.027027027027027
+      },
+      "delta": {
+        "w": 8,
+        "h": 1,
+        "x": 0,
+        "y": 0
+      },
+      "mismatch": true
+    },
+    {
+      "index": 20,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 0,
+      "glyphId": 55,
+      "originX": 247,
+      "originY": 112,
+      "width": 41,
+      "height": 48,
+      "libass": {
+        "minX": 247,
+        "minY": 115,
+        "maxX": 287,
+        "maxY": 156,
+        "width": 41,
+        "height": 42
+      },
+      "subframe": {
+        "minX": 250,
+        "minY": 115,
+        "maxX": 287,
+        "maxY": 157,
+        "width": 38,
+        "height": 43
+      },
+      "ratio": {
+        "w": 0.926829268292683,
+        "h": 1.0238095238095237
+      },
+      "delta": {
+        "w": -3,
+        "h": 1,
+        "x": 3,
+        "y": 0
+      },
+      "mismatch": true
+    },
+    {
+      "index": 14,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 4,
+      "glyphId": 72,
+      "originX": 210,
+      "originY": 120,
+      "width": 38,
+      "height": 40,
+      "libass": {
+        "minX": 210,
+        "minY": 120,
+        "maxX": 247,
+        "maxY": 156,
+        "width": 38,
+        "height": 37
+      },
+      "subframe": {
+        "minX": 210,
+        "minY": 124,
+        "maxX": 245,
+        "maxY": 157,
+        "width": 36,
+        "height": 34
+      },
+      "ratio": {
+        "w": 0.9473684210526315,
+        "h": 0.918918918918919
+      },
+      "delta": {
+        "w": -2,
+        "h": -3,
+        "x": 0,
+        "y": 4
+      },
+      "mismatch": true
+    },
+    {
+      "index": 2,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 0,
+      "glyphId": 54,
+      "originX": 99,
+      "originY": 112,
+      "width": 43,
+      "height": 48,
+      "libass": {
+        "minX": 102,
+        "minY": 114,
+        "maxX": 141,
+        "maxY": 156,
+        "width": 40,
+        "height": 43
+      },
+      "subframe": {
+        "minX": 104,
+        "minY": 115,
+        "maxX": 141,
+        "maxY": 159,
+        "width": 38,
+        "height": 45
+      },
+      "ratio": {
+        "w": 0.95,
+        "h": 1.0465116279069768
+      },
+      "delta": {
+        "w": -2,
+        "h": 2,
+        "x": 2,
+        "y": 1
+      },
+      "mismatch": true
+    },
+    {
+      "index": 5,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 1,
+      "glyphId": 80,
+      "originX": 129,
+      "originY": 120,
+      "width": 48,
+      "height": 40,
+      "libass": {
+        "minX": 129,
+        "minY": 120,
+        "maxX": 176,
+        "maxY": 156,
+        "width": 48,
+        "height": 37
+      },
+      "subframe": {
+        "minX": 129,
+        "minY": 120,
+        "maxX": 176,
+        "maxY": 159,
+        "width": 48,
+        "height": 40
+      },
+      "ratio": {
+        "w": 1,
+        "h": 1.0810810810810811
+      },
+      "delta": {
+        "w": 0,
+        "h": 3,
+        "x": 0,
+        "y": 0
+      },
+      "mismatch": true
+    },
+    {
+      "index": 8,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 2,
+      "glyphId": 82,
+      "originX": 164,
+      "originY": 120,
+      "width": 38,
+      "height": 40,
+      "libass": {
+        "minX": 164,
+        "minY": 120,
+        "maxX": 201,
+        "maxY": 156,
+        "width": 38,
+        "height": 37
+      },
+      "subframe": {
+        "minX": 164,
+        "minY": 120,
+        "maxX": 201,
+        "maxY": 159,
+        "width": 38,
+        "height": 40
+      },
+      "ratio": {
+        "w": 1,
+        "h": 1.0810810810810811
+      },
+      "delta": {
+        "w": 0,
+        "h": 3,
+        "x": 0,
+        "y": 0
+      },
+      "mismatch": true
+    },
+    {
+      "index": 11,
+      "text": "Smoke",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 3,
+      "glyphId": 78,
+      "originX": 189,
+      "originY": 112,
+      "width": 36,
+      "height": 48,
+      "libass": {
+        "minX": 189,
+        "minY": 115,
+        "maxX": 224,
+        "maxY": 156,
+        "width": 36,
+        "height": 42
+      },
+      "subframe": {
+        "minX": 189,
+        "minY": 116,
+        "maxX": 224,
+        "maxY": 157,
+        "width": 36,
+        "height": 42
+      },
+      "ratio": {
+        "w": 1,
+        "h": 1
+      },
+      "delta": {
+        "w": 0,
+        "h": 0,
+        "x": 0,
+        "y": 1
+      },
+      "mismatch": false
+    },
+    {
+      "index": 23,
+      "text": "Test",
+      "kind": "fill",
+      "segmentIndex": 0,
+      "glyphIndex": 1,
+      "glyphId": 72,
+      "originX": 268,
+      "originY": 120,
+      "width": 38,
+      "height": 40,
+      "libass": {
+        "minX": 268,
+        "minY": 120,
+        "maxX": 305,
+        "maxY": 156,
+        "width": 38,
+        "height": 37
+      },
+      "subframe": {
+        "minX": 268,
+        "minY": 120,
+        "maxX": 305,
+        "maxY": 157,
+        "width": 38,
+        "height": 38
+      },
+      "ratio": {
+        "w": 1,
+        "h": 1.027027027027027
+      },
+      "delta": {
+        "w": 0,
+        "h": 1,
+        "x": 0,
+        "y": 0
+      },
+      "mismatch": true
+    }
+  ]
+}

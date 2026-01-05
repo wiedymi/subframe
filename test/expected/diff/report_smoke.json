@@ -1,0 +1,60 @@
+{
+  "manifest": "test/manifest.json",
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "generatedAt": "2026-01-01T14:25:06.026Z",
+  "totals": {
+    "failures": 3
+  },
+  "cases": [
+    {
+      "id": "parity_smoke",
+      "timestamps": [
+        {
+          "t": 0,
+          "ok": false,
+          "stats": {
+            "maxError": 255,
+            "meanError": 3.3017573302469136,
+            "pctOver": 1.8299093364197532
+          },
+          "threshold": {
+            "max": 2,
+            "mean": 0.5,
+            "pct": 0.1
+          }
+        },
+        {
+          "t": 1000,
+          "ok": false,
+          "stats": {
+            "maxError": 255,
+            "meanError": 3.769901138117284,
+            "pctOver": 2.0582561728395063
+          },
+          "threshold": {
+            "max": 2,
+            "mean": 0.5,
+            "pct": 0.1
+          }
+        },
+        {
+          "t": 2000,
+          "ok": false,
+          "stats": {
+            "maxError": 255,
+            "meanError": 4.3795495756172835,
+            "pctOver": 2.3194444444444446
+          },
+          "threshold": {
+            "max": 2,
+            "mean": 0.5,
+            "pct": 0.1
+          }
+        }
+      ]
+    }
+  ]
+}
