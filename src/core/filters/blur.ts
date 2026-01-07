@@ -95,12 +95,14 @@ export function applyBeBlur(
   if (width <= 1 || height <= 1) return;
   const stride = bitmap.pitch;
   const tmp = new Uint16Array(stride * 2);
-
-  beBlurPre(bitmap.buffer, stride, width, height);
-  for (let i = 1; i < be; i++) {
-    beBlurOnce(bitmap.buffer, stride, width, height, tmp);
+  let remaining = be;
+  if (--remaining > 0) {
+    beBlurPre(bitmap.buffer, stride, width, height);
+    do {
+      beBlurOnce(bitmap.buffer, stride, width, height, tmp);
+    } while (--remaining > 0);
+    beBlurPost(bitmap.buffer, stride, width, height);
   }
-  beBlurPost(bitmap.buffer, stride, width, height);
   beBlurOnce(bitmap.buffer, stride, width, height, tmp);
 }
 

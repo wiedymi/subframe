@@ -21,9 +21,36 @@ export type FontSizingMetrics = {
 };
 
 function resolveFontSizingMetrics(font: FontHandle): FontSizingMetrics {
-  const ascender = font.ascender;
-  const descender = font.descender;
-  const height = font.height;
+  const fontMeta = font as unknown as {
+    os2?: {
+      usWinAscent?: number;
+      usWinDescent?: number;
+      sTypoAscender?: number;
+      sTypoDescender?: number;
+      sTypoLineGap?: number;
+    };
+  };
+  const os2 = fontMeta.os2;
+  let ascender = font.ascender;
+  let descender = font.descender;
+  let height = font.height;
+  if (os2) {
+    const winAscent = os2.usWinAscent ?? 0;
+    const winDescent = os2.usWinDescent ?? 0;
+    if (winAscent + winDescent !== 0) {
+      ascender = winAscent;
+      descender = -winDescent;
+      height = ascender - descender;
+    } else {
+      const typoAsc = os2.sTypoAscender ?? 0;
+      const typoDesc = os2.sTypoDescender ?? 0;
+      if (typoAsc - typoDesc !== 0) {
+        ascender = typoAsc;
+        descender = typoDesc;
+        height = ascender - descender;
+      }
+    }
+  }
   return { ascender, descender, height: height || ascender - descender || font.unitsPerEm };
 }
 
@@ -32,7 +59,14 @@ export function getFontSizingMetrics(font: FontHandle): FontSizingMetrics {
 }
 
 export function getFontScaleForSize(font: FontHandle, sizePx: number): number {
-  return font.scaleForSize(sizePx, "height");
+  const metrics = getFontSizingMetrics(font);
+  const denom = metrics.height > 0 ? metrics.height : font.unitsPerEm;
+  const baseHeight = font.height;
+  if (!Number.isFinite(baseHeight) || baseHeight <= 0) {
+    return sizePx / denom;
+  }
+  const adjustedSize = (sizePx * baseHeight) / denom;
+  return font.scaleForSize(adjustedSize, "height");
 }
 
 function getNameValue(records: NameRecord[], nameId: number): string | null {

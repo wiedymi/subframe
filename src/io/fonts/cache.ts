@@ -3,6 +3,7 @@ import { Font } from "text-shaper";
 const cache = new Map<string, Promise<Font>>();
 const sourceMap = new Map<string, FontSource>();
 let fontResolver: FontResolver | null = null;
+const styleCachePrefix = "__style__:";
 
 export type FontSource = string | ArrayBuffer | Uint8Array | Font;
 export type FontResolver = (
@@ -31,6 +32,21 @@ export function getFont(fontName: string): Promise<Font> {
   if (!cached) {
     cached = loadFont(fontName);
     cache.set(fontName, cached);
+  }
+  return cached;
+}
+
+export function getFontForStyle(
+  fontName: string,
+  bold: boolean,
+  italic: boolean,
+  sampleCodepoint?: number,
+): Promise<Font> {
+  const key = `${styleCachePrefix}${fontName}|${bold ? 1 : 0}|${italic ? 1 : 0}|${sampleCodepoint ?? 0}`;
+  let cached = cache.get(key);
+  if (!cached) {
+    cached = loadFontForStyle(fontName, bold, italic, sampleCodepoint);
+    cache.set(key, cached);
   }
   return cached;
 }
@@ -99,6 +115,38 @@ async function loadFont(fontName: string): Promise<Font> {
   }
 
   const { resolveFontPath } = await import("./resolve");
+  const path = resolveFontPath(fontName);
+  return await loadFontSource(path);
+}
+
+async function loadFontForStyle(
+  fontName: string,
+  bold: boolean,
+  italic: boolean,
+  sampleCodepoint?: number,
+): Promise<Font> {
+  const resolved = await resolveFontSource(fontName);
+  if (resolved) return await loadFontSource(resolved);
+
+  if (isURLLike(fontName)) {
+    return await Font.fromURL(fontName);
+  }
+
+  if (typeof Bun === "undefined") {
+    throw new Error(
+      "Font resolution in browser requires a URL (http/https/data/blob) or registerFontSource().",
+    );
+  }
+
+  const { resolveFontPath, resolveFontPathForCodepoint } = await import("./resolve");
+  const cp =
+    typeof sampleCodepoint === "number" && Number.isFinite(sampleCodepoint) && sampleCodepoint > 0
+      ? sampleCodepoint
+      : 0x41;
+  if (bold || italic) {
+    const styled = resolveFontPathForCodepoint(fontName, cp, bold, italic);
+    if (styled) return await loadFontSource(styled);
+  }
   const path = resolveFontPath(fontName);
   return await loadFontSource(path);
 }

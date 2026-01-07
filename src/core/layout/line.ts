@@ -129,7 +129,7 @@ export function computeLineWidth(
   const baseWidth = calculateLineWidth(shaped) * scale;
   let width = quantSubpixel(baseWidth);
   if (spacingQ !== 0 && shaped.positions.length > 0) {
-    width = quantSubpixel(width + spacingQ * (shaped.positions.length - 1));
+    width = quantSubpixel(width + spacingQ * shaped.positions.length);
   }
   return quantSubpixel(width);
 }

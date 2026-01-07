@@ -21,6 +21,7 @@ interface AppState {
   timerMode: boolean;
   timerStartTime: number;
   timerAnimationId: number | null;
+  renderAtPlayRes: boolean;
 }
 
 const state: AppState = {
@@ -36,6 +37,7 @@ const state: AppState = {
   timerMode: true,
   timerStartTime: 0,
   timerAnimationId: null,
+  renderAtPlayRes: false,
 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -46,6 +48,7 @@ const ctx = canvas.getContext("2d")!;
 const playPauseBtn = $<HTMLButtonElement>("play-pause");
 const timeline = $<HTMLInputElement>("timeline");
 const timeDisplay = $<HTMLSpanElement>("time-display");
+const renderModeToggle = $<HTMLInputElement>("render-mode");
 const videoInput = $<HTMLInputElement>("video-input");
 const subtitleInput = $<HTMLInputElement>("subtitle-input");
 const fontInput = $<HTMLInputElement>("font-input");
@@ -56,6 +59,26 @@ const fontStatus = $<HTMLSpanElement>("font-status");
 const renderStatus = $<HTMLSpanElement>("render-status");
 const fontList = $<HTMLUListElement>("font-list");
 const logEl = $<HTMLPreElement>("log");
+const playerContainer = document.querySelector(".player-container") as HTMLElement | null;
+const panel = document.querySelector(".panel") as HTMLElement | null;
+const perfRender = $<HTMLSpanElement>("perf-render");
+const perfComposite = $<HTMLSpanElement>("perf-composite");
+const perfTotal = $<HTMLSpanElement>("perf-total");
+const perfLayers = $<HTMLSpanElement>("perf-layers");
+const perfMemory = $<HTMLSpanElement>("perf-memory");
+const perfGraph = $<HTMLCanvasElement>("perf-graph");
+const memoryGraph = $<HTMLCanvasElement>("memory-graph");
+const bgMode = $<HTMLSelectElement>("bg-mode");
+const bgColorA = $<HTMLInputElement>("bg-color-a");
+const bgColorB = $<HTMLInputElement>("bg-color-b");
+const videoWrapper = document.querySelector(".video-wrapper") as HTMLElement | null;
+
+const MAX_LOG_LINES = 500;
+const HISTORY_SIZE = 120;
+const renderHistory = new Float32Array(HISTORY_SIZE);
+const memoryHistory = new Float32Array(HISTORY_SIZE);
+let historyIndex = 0;
+let historyCount = 0;
 
 function log(msg: string, level: "info" | "warn" | "error" = "info") {
   const time = new Date().toISOString().slice(11, 23);
@@ -63,6 +86,9 @@ function log(msg: string, level: "info" | "warn" | "error" = "info") {
   line.className = level;
   line.textContent = `[${time}] ${msg}`;
   logEl.appendChild(line);
+  while (logEl.childNodes.length > MAX_LOG_LINES) {
+    logEl.removeChild(logEl.firstChild!);
+  }
   logEl.scrollTop = logEl.scrollHeight;
   if (level === "error") console.error(msg);
 }
@@ -73,8 +99,113 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, "0")}:${secs.toFixed(3).padStart(6, "0")}`;
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let idx = 0;
+  let value = bytes;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx++;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${units[idx]}`;
+}
+
+function getHeapBytes(): number | null {
+  const memory = (performance as any).memory as { usedJSHeapSize?: number } | undefined;
+  if (!memory || typeof memory.usedJSHeapSize !== "number") return null;
+  return memory.usedJSHeapSize;
+}
+
+function pushHistory(renderMs: number, frameBytes: number) {
+  renderHistory[historyIndex] = renderMs;
+  memoryHistory[historyIndex] = frameBytes / (1024 * 1024);
+  historyIndex = (historyIndex + 1) % HISTORY_SIZE;
+  if (historyCount < HISTORY_SIZE) historyCount++;
+}
+
+function drawGraphs() {
+  drawGraph(perfGraph, renderHistory, historyCount, historyIndex, "#7ee787");
+  drawGraph(memoryGraph, memoryHistory, historyCount, historyIndex, "#58a6ff");
+}
+
+function drawGraph(
+  canvasEl: HTMLCanvasElement,
+  data: Float32Array,
+  count: number,
+  index: number,
+  color: string,
+) {
+  if (count <= 0) return;
+  const ctx2d = canvasEl.getContext("2d");
+  if (!ctx2d) return;
+  const w = canvasEl.width;
+  const h = canvasEl.height;
+  ctx2d.clearRect(0, 0, w, h);
+
+  let max = 0.001;
+  for (let i = 0; i < count; i++) {
+    const idx = (index - count + i + HISTORY_SIZE) % HISTORY_SIZE;
+    const v = data[idx]!;
+    if (v > max) max = v;
+  }
+
+  const step = count > 1 ? w / (count - 1) : w;
+  ctx2d.beginPath();
+  for (let i = 0; i < count; i++) {
+    const idx = (index - count + i + HISTORY_SIZE) % HISTORY_SIZE;
+    const v = data[idx]!;
+    const x = i * step;
+    const y = h - (v / max) * h;
+    if (i === 0) {
+      ctx2d.moveTo(x, y);
+    } else {
+      ctx2d.lineTo(x, y);
+    }
+  }
+  ctx2d.strokeStyle = color;
+  ctx2d.lineWidth = 2;
+  ctx2d.stroke();
+}
+
 function updateTimeDisplay() {
   timeDisplay.textContent = `${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;
+}
+
+function applyBackground() {
+  if (!videoWrapper) return;
+  const mode = bgMode.value;
+  const colorA = bgColorA.value;
+  const colorB = bgColorB.value;
+
+  switch (mode) {
+    case "solid":
+      videoWrapper.style.backgroundColor = colorA;
+      videoWrapper.style.backgroundImage = "none";
+      videoWrapper.style.backgroundSize = "auto";
+      break;
+    case "gradient":
+      videoWrapper.style.backgroundColor = colorA;
+      videoWrapper.style.backgroundImage = `linear-gradient(135deg, ${colorA}, ${colorB})`;
+      videoWrapper.style.backgroundSize = "auto";
+      break;
+    case "dark":
+      videoWrapper.style.backgroundColor = "#0a0a0a";
+      videoWrapper.style.backgroundImage = "none";
+      videoWrapper.style.backgroundSize = "auto";
+      break;
+    case "light":
+      videoWrapper.style.backgroundColor = "#f2f2f2";
+      videoWrapper.style.backgroundImage = "none";
+      videoWrapper.style.backgroundSize = "auto";
+      break;
+    case "checker":
+    default:
+      videoWrapper.style.backgroundColor = colorA;
+      videoWrapper.style.backgroundImage = `repeating-conic-gradient(${colorA} 0% 25%, ${colorB} 0% 50%)`;
+      videoWrapper.style.backgroundSize = "16px 16px";
+      break;
+  }
 }
 
 function updateFontList() {
@@ -93,6 +224,12 @@ function addLoadedFont(name: string, source: string) {
   state.loadedFontNames.add(key);
   state.loadedFonts.push({ name, source });
   updateFontList();
+}
+
+function registerFontOnce(name: string, source: ArrayBuffer, label: string, listInUi = true) {
+  registerFontSource(name, source);
+  if (!listInUi) return;
+  addLoadedFont(name, label);
 }
 
 async function loadVideo(file: File) {
@@ -115,6 +252,7 @@ async function loadSubtitle(file: File) {
       throw new Error("Failed to parse ASS file");
     }
     state.document = result.document;
+    resetFontCache();
 
     // Calculate duration from subtitle events
     if (result.document.events?.length) {
@@ -142,8 +280,7 @@ async function loadFontFile(file: File) {
     const baseName = file.name.replace(/\.(ttf|otf|ttc|otc|woff|woff2)$/i, "");
 
     // Register with ArrayBuffer directly - subframe supports this
-    registerFontSource(baseName, buffer);
-    addLoadedFont(baseName, "file");
+    registerFontOnce(baseName, buffer, "file");
     log(`Font registered: ${baseName}`);
   } catch (err) {
     log(`Failed to load font ${file.name}: ${err}`, "error");
@@ -153,12 +290,136 @@ async function loadFontFile(file: File) {
 type LocalFontData = {
   family: string;
   fullName?: string;
+  postscriptName?: string;
   style?: string;
   blob: () => Promise<Blob>;
 };
 
 let localFontIndex: Map<string, LocalFontData> | null = null;
 let localFontIndexPromise: Promise<Map<string, LocalFontData> | null> | null = null;
+const localFontBufferCache = new WeakMap<LocalFontData, Promise<ArrayBuffer>>();
+let localFontList: LocalFontData[] | null = null;
+const localFontAliasCache = new Map<string, LocalFontData>();
+
+function normalizeFontKey(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function sanitizeFontName(name: string): string {
+  return name
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim()
+    .replace(/^@+/, "")
+    .replace(/^["']+|["']+$/g, "");
+}
+
+function nameHasStyle(name: string, style: string): boolean {
+  const lower = name.toLowerCase();
+  const s = style.toLowerCase();
+  return lower.includes(s);
+}
+
+function scoreFontEntry(requested: string, entry: LocalFontData): number {
+  const req = requested.toLowerCase();
+  const reqNorm = normalizeFontKey(requested);
+  const names = [entry.fullName ?? "", entry.family ?? "", entry.postscriptName ?? ""];
+  let score = 0;
+  for (const name of names) {
+    if (!name) continue;
+    const lower = name.toLowerCase();
+    if (lower === req) score = Math.max(score, 100);
+    const norm = normalizeFontKey(name);
+    if (norm && reqNorm && norm === reqNorm) score = Math.max(score, 90);
+    if (req && lower.includes(req)) score = Math.max(score, 70);
+    if (reqNorm && norm && norm.includes(reqNorm)) score = Math.max(score, 60);
+  }
+
+  const style = entry.style ?? "";
+  if (style) {
+    if (!/(bold|italic|oblique|black|light|thin|regular)/i.test(requested)) {
+      if (/regular/i.test(style)) score += 5;
+      if (/bold|italic|oblique|black|light|thin/i.test(style)) score -= 2;
+    } else if (nameHasStyle(requested, style)) {
+      score += 5;
+    }
+  }
+
+  return score;
+}
+
+function findFontEntryByIncludes(name: string): LocalFontData | null {
+  if (!localFontList || localFontList.length === 0) return null;
+  const cached = localFontAliasCache.get(name);
+  if (cached) return cached;
+  const needle = name.toLowerCase();
+  const needleNorm = normalizeFontKey(name);
+  let match: LocalFontData | null = null;
+  for (const entry of localFontList) {
+    const fullName = entry.fullName ?? "";
+    const family = entry.family ?? "";
+    const postscriptName = entry.postscriptName ?? "";
+    const fullLower = fullName.toLowerCase();
+    const familyLower = family.toLowerCase();
+    const postLower = postscriptName.toLowerCase();
+    if (fullLower.includes(needle) || familyLower.includes(needle) || postLower.includes(needle)) {
+      match = entry;
+      break;
+    }
+    if (needleNorm) {
+      const fullNorm = normalizeFontKey(fullName);
+      const familyNorm = normalizeFontKey(family);
+      const postNorm = normalizeFontKey(postscriptName);
+      if (
+        (fullNorm && fullNorm.includes(needleNorm)) ||
+        (familyNorm && familyNorm.includes(needleNorm)) ||
+        (postNorm && postNorm.includes(needleNorm))
+      ) {
+        match = entry;
+        break;
+      }
+    }
+  }
+  if (match) localFontAliasCache.set(name, match);
+  return match;
+}
+
+function resolveBestFontEntry(name: string, index: Map<string, LocalFontData>): LocalFontData | null {
+  const cached = localFontAliasCache.get(name);
+  if (cached) return cached;
+  const key = name.toLowerCase();
+  const normKey = normalizeFontKey(name);
+  const direct = index.get(key) ?? (normKey ? index.get(normKey) : undefined);
+  if (!localFontList || localFontList.length === 0) {
+    if (direct) localFontAliasCache.set(name, direct);
+    return direct ?? null;
+  }
+  let best: LocalFontData | null = null;
+  let bestScore = 0;
+  for (const entry of localFontList) {
+    const score = scoreFontEntry(name, entry);
+    if (score > bestScore) {
+      bestScore = score;
+      best = entry;
+    }
+  }
+  if (!best) best = direct ?? findFontEntryByIncludes(name);
+  if (best) localFontAliasCache.set(name, best);
+  return best;
+}
+
+function getLocalFontBuffer(entry: LocalFontData): Promise<ArrayBuffer> {
+  const cached = localFontBufferCache.get(entry);
+  if (cached) return cached;
+  const load = entry
+    .blob()
+    .then((blob) => blob.arrayBuffer())
+    .catch((err) => {
+      localFontBufferCache.delete(entry);
+      throw err;
+    });
+  localFontBufferCache.set(entry, load);
+  return load;
+}
 
 async function buildLocalFontIndex(): Promise<Map<string, LocalFontData> | null> {
   if (!("queryLocalFonts" in window)) return null;
@@ -168,14 +429,39 @@ async function buildLocalFontIndex(): Promise<Map<string, LocalFontData> | null>
     try {
       log("Indexing local fonts (lazy resolver)...");
       const fonts = await (window as any).queryLocalFonts();
+      const list = fonts as LocalFontData[];
       const index = new Map<string, LocalFontData>();
-      for (const fontData of fonts as LocalFontData[]) {
-        const family = fontData.family;
-        if (!family) continue;
-        const key = family.toLowerCase();
-        if (!index.has(key)) index.set(key, fontData);
+      localFontAliasCache.clear();
+      for (const fontData of list) {
+        const family = fontData.family ?? "";
+        const fullName = fontData.fullName ?? "";
+        const postscriptName = fontData.postscriptName ?? "";
+        if (family) {
+          const familyKey = family.toLowerCase();
+          if (!index.has(familyKey)) index.set(familyKey, fontData);
+          const familyNorm = normalizeFontKey(family);
+          if (familyNorm && !index.has(familyNorm)) index.set(familyNorm, fontData);
+        }
+        if (fullName) {
+          const fullKey = fullName.toLowerCase();
+          if (!index.has(fullKey)) index.set(fullKey, fontData);
+          const fullNorm = normalizeFontKey(fullName);
+          if (fullNorm && !index.has(fullNorm)) index.set(fullNorm, fontData);
+        }
+        if (postscriptName) {
+          const postKey = postscriptName.toLowerCase();
+          if (!index.has(postKey)) index.set(postKey, fontData);
+          const postNorm = normalizeFontKey(postscriptName);
+          if (postNorm && !index.has(postNorm)) index.set(postNorm, fontData);
+        }
       }
+      localFontList = list;
       log(`Indexed ${index.size} local font families`);
+      resetFontCache();
+      if (state.document) {
+        state.lastRenderTime = -1;
+        renderCurrentFrame();
+      }
       return index;
     } catch (err) {
       log(`Failed to query local fonts: ${err}`, "error");
@@ -189,7 +475,6 @@ async function buildLocalFontIndex(): Promise<Map<string, LocalFontData> | null>
 }
 
 async function primeLocalFonts() {
-  if (state.loadedFonts.length > 0) return;
   if (!("queryLocalFonts" in window)) {
     log("No local font access; load fonts via file input for browser rendering.", "warn");
     return;
@@ -205,36 +490,19 @@ async function queryLocalFonts() {
 
   try {
     log("Requesting local font access...");
-    const fonts = await (window as any).queryLocalFonts();
-    log(`Found ${fonts.length} local fonts`);
-
-    const seen = new Set<string>();
-    let loadedCount = 0;
-
-    for (const fontData of fonts as LocalFontData[]) {
-      const family = fontData.family;
-      if (seen.has(family)) continue;
-      seen.add(family);
-
-      try {
-        const blob = await fontData.blob();
-        const buffer = await blob.arrayBuffer();
-        registerFontSource(family, buffer);
-        addLoadedFont(family, "system");
-        loadedCount++;
-      } catch {
-        // Skip fonts that fail to load
-      }
+    const index = await buildLocalFontIndex();
+    if (!index) {
+      log("Local font access failed", "error");
+      return;
     }
-
-    log(`Loaded ${loadedCount} unique font families`);
+    log(`Indexed ${index.size} local font families (lazy)`);
   } catch (err) {
     log(`Failed to query local fonts: ${err}`, "error");
   }
 }
 
 function getCanvasSize(): { width: number; height: number } {
-  if (!state.timerMode && video.videoWidth > 0) {
+  if (!state.timerMode && video.videoWidth > 0 && !state.renderAtPlayRes) {
     return { width: video.videoWidth, height: video.videoHeight };
   }
   const doc = state.document;
@@ -244,17 +512,42 @@ function getCanvasSize(): { width: number; height: number } {
 }
 
 function resizeCanvas() {
-  const rect = canvas.parentElement!.getBoundingClientRect();
+  const wrapper = canvas.parentElement!;
+  const wrapperRect = wrapper.getBoundingClientRect();
+
+  if (!state.timerMode && video.videoWidth > 0) {
+    const videoRect = video.getBoundingClientRect();
+    if (videoRect.width > 0 && videoRect.height > 0) {
+      const { width: targetW, height: targetH } = getCanvasSize();
+      const dpr = window.devicePixelRatio || 1;
+      const renderW = state.renderAtPlayRes
+        ? Math.max(1, Math.round(targetW))
+        : Math.max(1, Math.round(videoRect.width * dpr));
+      const renderH = state.renderAtPlayRes
+        ? Math.max(1, Math.round(targetH))
+        : Math.max(1, Math.round(videoRect.height * dpr));
+
+      canvas.width = renderW;
+      canvas.height = renderH;
+      canvas.style.width = `${videoRect.width}px`;
+      canvas.style.height = `${videoRect.height}px`;
+      canvas.style.left = `${videoRect.left - wrapperRect.left}px`;
+      canvas.style.top = `${videoRect.top - wrapperRect.top}px`;
+      resizeGraphs();
+      return;
+    }
+  }
+
   const { width: canvasW, height: canvasH } = getCanvasSize();
   const videoAspect = canvasW / canvasH;
-  const containerAspect = rect.width / rect.height;
+  const containerAspect = wrapperRect.width / wrapperRect.height;
 
   let w: number, h: number;
   if (containerAspect > videoAspect) {
-    h = rect.height;
+    h = wrapperRect.height;
     w = h * videoAspect;
   } else {
-    w = rect.width;
+    w = wrapperRect.width;
     h = w / videoAspect;
   }
 
@@ -266,8 +559,25 @@ function resizeCanvas() {
   canvas.height = renderH;
   canvas.style.width = `${w}px`;
   canvas.style.height = `${h}px`;
-  canvas.style.left = `${(rect.width - w) / 2}px`;
-  canvas.style.top = `${(rect.height - h) / 2}px`;
+  canvas.style.left = `${(wrapperRect.width - w) / 2}px`;
+  canvas.style.top = `${(wrapperRect.height - h) / 2}px`;
+  resizeGraphs();
+}
+
+function resizeGraphs() {
+  resizeGraphCanvas(perfGraph);
+  resizeGraphCanvas(memoryGraph);
+}
+
+function resizeGraphCanvas(graph: HTMLCanvasElement) {
+  const rect = graph.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(rect.width * dpr));
+  const h = Math.max(1, Math.round(rect.height * dpr));
+  if (graph.width !== w || graph.height !== h) {
+    graph.width = w;
+    graph.height = h;
+  }
 }
 
 function compositeLayer(layer: BitmapLayer) {
@@ -319,14 +629,32 @@ async function renderCurrentFrame() {
 
     const startTime = performance.now();
     const result = await renderFrame(state.document, timeMs, width, height);
-    const elapsed = performance.now() - startTime;
+    const renderMs = performance.now() - startTime;
 
+    const compositeStart = performance.now();
+    let frameBytes = 0;
     for (const layer of result.layers) {
+      if (layer.bitmap) {
+        frameBytes += (layer.bitmap as Uint8Array).byteLength ?? layer.bitmap.length ?? 0;
+      }
       compositeLayer(layer);
     }
+    const compositeMs = performance.now() - compositeStart;
+    const totalMs = renderMs + compositeMs;
 
     state.lastRenderTime = timeMs;
-    renderStatus.textContent = `${result.layers.length} layers (${elapsed.toFixed(1)}ms)`;
+    renderStatus.textContent = `${result.layers.length} layers (${totalMs.toFixed(1)}ms)`;
+
+    const heapBytes = getHeapBytes();
+    perfRender.textContent = `${renderMs.toFixed(2)} ms`;
+    perfComposite.textContent = `${compositeMs.toFixed(2)} ms`;
+    perfTotal.textContent = `${totalMs.toFixed(2)} ms`;
+    perfLayers.textContent = `${result.layers.length}`;
+    perfMemory.textContent = `${formatBytes(frameBytes)} frame, ${
+      heapBytes ? formatBytes(heapBytes) : "heap n/a"
+    }`;
+    pushHistory(totalMs, frameBytes);
+    drawGraphs();
   } catch (err) {
     log(`Render error: ${err}`, "error");
     renderStatus.textContent = "error";
@@ -462,44 +790,79 @@ function onKeyDown(e: KeyboardEvent) {
 }
 
 function init() {
+  renderModeToggle.checked = state.renderAtPlayRes;
   setFontResolver(async (fontName) => {
-    const index = localFontIndex;
+    const index = localFontIndex ?? (await buildLocalFontIndex());
     if (!index) return null;
-    const entry = index.get(fontName.toLowerCase());
+    const cleanedName = sanitizeFontName(fontName);
+    const key = cleanedName.toLowerCase();
+    const entry = resolveBestFontEntry(cleanedName, index);
     if (!entry) return null;
-    const buffer = await (await entry.blob()).arrayBuffer();
-    registerFontSource(entry.family, buffer);
-    addLoadedFont(entry.family, "system");
+    const buffer = await getLocalFontBuffer(entry);
+    const familyKey = entry.family.toLowerCase();
+    registerFontOnce(entry.family, buffer, "system");
+    if (key && key !== familyKey) {
+      registerFontOnce(cleanedName, buffer, "system", false);
+    }
+    const fullName = entry.fullName;
+    if (fullName) {
+      const fullKey = fullName.toLowerCase();
+      if (fullKey !== familyKey && fullKey !== key) {
+        registerFontOnce(fullName, buffer, "system", false);
+      }
+    }
+    const postscriptName = entry.postscriptName;
+    if (postscriptName) {
+      const postKey = postscriptName.toLowerCase();
+      if (postKey !== familyKey && postKey !== key) {
+        registerFontOnce(postscriptName, buffer, "system", false);
+      }
+    }
     return buffer;
   });
 
-  video.addEventListener("timeupdate", onVideoTimeUpdate);
-  video.addEventListener("loadedmetadata", onVideoLoadedMetadata);
-  video.addEventListener("play", () => {
+  const cleanup: Array<() => void> = [];
+  const on = <T extends EventTarget>(target: T, type: string, handler: EventListener) => {
+    target.addEventListener(type, handler);
+    cleanup.push(() => target.removeEventListener(type, handler));
+  };
+
+  on(video, "timeupdate", onVideoTimeUpdate);
+  on(video, "loadedmetadata", onVideoLoadedMetadata);
+  on(video, "play", () => {
     if (!state.timerMode) {
       state.isPlaying = true;
       playPauseBtn.textContent = "⏸";
     }
   });
-  video.addEventListener("pause", () => {
+  on(video, "pause", () => {
     if (!state.timerMode) {
       state.isPlaying = false;
       playPauseBtn.textContent = "▶";
     }
   });
 
-  playPauseBtn.addEventListener("click", togglePlayPause);
-  timeline.addEventListener("input", onTimelineInput);
+  on(playPauseBtn, "click", togglePlayPause);
+  on(timeline, "input", onTimelineInput);
+  on(renderModeToggle, "change", () => {
+    state.renderAtPlayRes = renderModeToggle.checked;
+    state.lastRenderTime = -1;
+    resizeCanvas();
+    renderCurrentFrame();
+  });
+  on(bgMode, "change", applyBackground);
+  on(bgColorA, "input", applyBackground);
+  on(bgColorB, "input", applyBackground);
 
-  videoInput.addEventListener("change", () => {
+  on(videoInput, "change", () => {
     if (videoInput.files?.[0]) loadVideo(videoInput.files[0]);
   });
 
-  subtitleInput.addEventListener("change", () => {
+  on(subtitleInput, "change", () => {
     if (subtitleInput.files?.[0]) loadSubtitle(subtitleInput.files[0]);
   });
 
-  fontInput.addEventListener("change", () => {
+  on(fontInput, "change", () => {
     if (fontInput.files) {
       for (const file of fontInput.files) {
         loadFontFile(file);
@@ -507,14 +870,41 @@ function init() {
     }
   });
 
-  localFontsBtn.addEventListener("click", queryLocalFonts);
+  on(localFontsBtn, "click", queryLocalFonts);
 
-  window.addEventListener("resize", resizeCanvas);
-  document.addEventListener("keydown", onKeyDown);
+  on(window, "resize", resizeCanvas);
+  on(document, "keydown", onKeyDown);
+
+  let resizeObserver: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => {
+      resizeCanvas();
+    });
+    if (playerContainer) resizeObserver.observe(playerContainer);
+    if (panel) resizeObserver.observe(panel);
+  }
 
   resizeCanvas();
+  applyBackground();
   updateTimeDisplay();
   log("Playground initialized (timer mode - no video required)");
+  void queryLocalFonts();
+
+  const cleanupFn = () => {
+    if (state.timerAnimationId !== null) {
+      cancelAnimationFrame(state.timerAnimationId);
+      state.timerAnimationId = null;
+    }
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      resizeObserver = null;
+    }
+    for (const dispose of cleanup) dispose();
+  };
+  (window as any).__subframePlaygroundCleanup = cleanupFn;
 }
 
+if ((window as any).__subframePlaygroundCleanup) {
+  (window as any).__subframePlaygroundCleanup();
+}
 init();

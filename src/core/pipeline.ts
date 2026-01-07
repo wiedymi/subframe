@@ -76,7 +76,15 @@ async function renderFrameInternal(
     releaseGlyphBuffer(usedGlyphBuffers[i]!);
   }
 
-  return { layers, activeEvents, frame };
+  const sortedLayers = layers
+    .map((layer, order) => ({ layer, order }))
+    .sort((a, b) => {
+      if (a.layer.z !== b.layer.z) return a.layer.z - b.layer.z;
+      return a.order - b.order;
+    })
+    .map((entry) => entry.layer);
+
+  return { layers: sortedLayers, activeEvents, frame };
 }
 
 export async function renderFrame(

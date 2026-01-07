@@ -36,7 +36,7 @@ export function fadeFactorSimple(
 ): number {
   const start = ev.start;
   const end = ev.end;
-  if (timeMs <= start) return 0;
+  if (timeMs < start) return 0;
   if (timeMs >= end) return 0;
 
   if (fadeIn > 0 && timeMs < start + fadeIn) {

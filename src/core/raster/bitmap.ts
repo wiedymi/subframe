@@ -79,6 +79,72 @@ export function addBitmapClamped(
   }
 }
 
+export function maxBitmapClamped(
+  dst: Uint8Array,
+  dstWidth: number,
+  dstHeight: number,
+  dstStride: number,
+  src: Uint8Array,
+  srcWidth: number,
+  srcHeight: number,
+  srcStride: number,
+  offsetX: number,
+  offsetY: number,
+): void {
+  const startX = Math.max(0, offsetX);
+  const startY = Math.max(0, offsetY);
+  const endX = Math.min(dstWidth, offsetX + srcWidth);
+  const endY = Math.min(dstHeight, offsetY + srcHeight);
+  if (startX >= endX || startY >= endY) return;
+  const srcStartX = startX - offsetX;
+  const srcStartY = startY - offsetY;
+  const span = endX - startX;
+  for (let y = 0; y < endY - startY; y++) {
+    const dstRow = (startY + y) * dstStride + startX;
+    const srcRow = (srcStartY + y) * srcStride + srcStartX;
+    for (let x = 0; x < span; x++) {
+      const s = src[srcRow + x]!;
+      if (!s) continue;
+      const idx = dstRow + x;
+      const v = dst[idx]!;
+      dst[idx] = s > v ? s : v;
+    }
+  }
+}
+
+export function subBitmapClamped(
+  dst: Uint8Array,
+  dstWidth: number,
+  dstHeight: number,
+  dstStride: number,
+  src: Uint8Array,
+  srcWidth: number,
+  srcHeight: number,
+  srcStride: number,
+  offsetX: number,
+  offsetY: number,
+): void {
+  const startX = Math.max(0, offsetX);
+  const startY = Math.max(0, offsetY);
+  const endX = Math.min(dstWidth, offsetX + srcWidth);
+  const endY = Math.min(dstHeight, offsetY + srcHeight);
+  if (startX >= endX || startY >= endY) return;
+  const srcStartX = startX - offsetX;
+  const srcStartY = startY - offsetY;
+  const span = endX - startX;
+  for (let y = 0; y < endY - startY; y++) {
+    const dstRow = (startY + y) * dstStride + startX;
+    const srcRow = (srcStartY + y) * srcStride + srcStartX;
+    for (let x = 0; x < span; x++) {
+      const s = src[srcRow + x]!;
+      if (!s) continue;
+      const idx = dstRow + x;
+      const v = dst[idx]! - s;
+      dst[idx] = v > 0 ? v : 0;
+    }
+  }
+}
+
 export function normalizeLayerOrigin(layer: {
   bitmap: Uint8Array;
   width: number;

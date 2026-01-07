@@ -1,7 +1,7 @@
 import type { SubtitleDocument, SubtitleEvent, Effect } from "subforge/core";
 import type { GlyphBuffer } from "text-shaper";
 import type { FrameContext } from "../data/types";
-import { getFont } from "../../io/fonts/cache";
+import { getFontForStyle } from "../../io/fonts/cache";
 import { quantSubpixel } from "../math/fixed";
 import {
   resolveOutlineColor,
@@ -110,6 +110,15 @@ function reorderTokensForBidi(
   return out;
 }
 
+function findSampleCodepoint(text: string): number | null {
+  for (let i = 0; i < text.length; ) {
+    const cp = text.codePointAt(i) ?? 0;
+    if (cp !== 0 && cp !== 10 && cp !== 13) return cp;
+    i += cp >= 0x10000 ? 2 : 1;
+  }
+  return null;
+}
+
 export type EventLayoutInput = {
   doc: SubtitleDocument;
   ev: SubtitleEvent;
@@ -195,22 +204,49 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     return false;
   });
   const useMargins = true;
-  const screenScaleX = (!hasHardOverrides && useMargins)
-    ? fitWidth / playResX
-    : baseContentWidth / playResX;
-  const screenScaleY = (!hasHardOverrides && useMargins)
-    ? fitHeight / playResY
-    : baseContentHeight / playResY;
+  const fontScrW = (!hasHardOverrides && useMargins) ? fitWidth : baseContentWidth;
+  const fontScrH = (!hasHardOverrides && useMargins) ? fitHeight : baseContentHeight;
+  const screenScaleX = fontScrW / playResX;
+  const screenScaleY = fontScrH / playResY;
   const safeScreenScaleX =
     Number.isFinite(screenScaleX) && screenScaleX > 0 ? screenScaleX : 1;
   const safeScreenScaleY =
     Number.isFinite(screenScaleY) && screenScaleY > 0 ? screenScaleY : 1;
   const safeScreenScaleXPar = safeScreenScaleX / parScaleX;
-  const safeBorderScaleX =
-    (scaleBorderAndShadow ? safeScreenScaleX : safeScreenScaleX) / parScaleX;
-  const safeBorderScaleY = scaleBorderAndShadow ? safeScreenScaleY : 1;
-  const safeBlurScaleX = safeScreenScaleX;
-  const safeBlurScaleY = safeScreenScaleY;
+
+  const info = doc.info as unknown as {
+    layoutResX?: number;
+    layoutResY?: number;
+    storageWidth?: number;
+    storageHeight?: number;
+  };
+  let layoutResX = Number.isFinite(info.layoutResX) ? (info.layoutResX as number) : 0;
+  let layoutResY = Number.isFinite(info.layoutResY) ? (info.layoutResY as number) : 0;
+  if (!(layoutResX > 0 && layoutResY > 0)) {
+    const storageWidth = Number.isFinite(info.storageWidth)
+      ? (info.storageWidth as number)
+      : 0;
+    const storageHeight = Number.isFinite(info.storageHeight)
+      ? (info.storageHeight as number)
+      : 0;
+    if (storageWidth > 0 && storageHeight > 0) {
+      layoutResX = storageWidth;
+      layoutResY = storageHeight;
+    } else {
+      layoutResX = frame.width;
+      layoutResY = frame.height;
+    }
+  }
+  const blurScaleX = fontScrW / layoutResX;
+  const blurScaleY = fontScrH / layoutResY;
+  const safeBlurScaleX =
+    Number.isFinite(blurScaleX) && blurScaleX > 0 ? blurScaleX : 1;
+  const safeBlurScaleY =
+    Number.isFinite(blurScaleY) && blurScaleY > 0 ? blurScaleY : 1;
+  const borderScaleX = scaleBorderAndShadow ? safeScreenScaleX : safeBlurScaleX;
+  const borderScaleY = scaleBorderAndShadow ? safeScreenScaleY : safeBlurScaleY;
+  const safeBorderScaleX = borderScaleX / parScaleX;
+  const safeBorderScaleY = borderScaleY;
   const toScreenX = (x: number): number => x * safeScreenScaleXPar;
   const toScreenY = (y: number): number => y * safeScreenScaleY;
 
@@ -314,8 +350,8 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
       const found = findMoveEffect(segEffects);
       if (found) {
         move = {
-          from: [toScreenX(found.from[0]), toScreenY(found.from[1])],
-          to: [toScreenX(found.to[0]), toScreenY(found.to[1])],
+          from: [found.from[0], found.from[1]],
+          to: [found.to[0], found.to[1]],
           t1: found.t1,
           t2: found.t2,
         };
@@ -325,7 +361,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     if (segEffects && segEffects.length > 0) {
       const foundClip = findClipEffect(
         segEffects,
-        safeScreenScaleXPar,
+        safeScreenScaleX,
         safeScreenScaleY,
       );
       if (foundClip) clip = foundClip;
@@ -436,14 +472,20 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
       if (edgeBlurOverride !== null) edgeBlur = edgeBlurOverride;
     }
 
-    const fontName = inlineStyle?.fontName ?? baseStyle.fontName;
-    let fontSize = inlineStyle?.fontSize ?? baseStyle.fontSize;
-    const font = await getFont(fontName);
     const boldValue = inlineStyle?.bold ?? baseStyle.bold;
     const italicValue = inlineStyle?.italic ?? baseStyle.italic;
     const boldRequested =
       typeof boldValue === "number" ? boldValue !== 0 : !!boldValue;
     const italicRequested = !!italicValue;
+    const fontName = inlineStyle?.fontName ?? baseStyle.fontName;
+    let fontSize = inlineStyle?.fontSize ?? baseStyle.fontSize;
+    const sampleCodepoint = findSampleCodepoint(seg.text);
+    const font = await getFontForStyle(
+      fontName,
+      boldRequested,
+      italicRequested,
+      sampleCodepoint ?? undefined,
+    );
     const baseFontStyle = resolveFontStyle(
       font,
       boldRequested,
@@ -563,19 +605,23 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
       const scaleFactor = 1 / (1 << (drawingScale - 1));
       const path = parseDrawingPath(drawing.commands, scaleFactor);
       if (path && path.bounds) {
-        const baselineOffset = (drawingBaseline ?? 0) * scaleFactor;
-        const yMin = path.bounds.yMin - baselineOffset;
-        const yMax = path.bounds.yMax - baselineOffset;
+        const pbo = drawingBaseline ?? 0;
+        const pboScaled = pbo * scaleFactor;
         const xMin = path.bounds.xMin;
         const xMax = path.bounds.xMax;
+        const yMin = path.bounds.yMin;
+        const yMax = path.bounds.yMax;
+        const height = yMax - yMin;
+        const ascRaw = height - pboScaled;
+        const drawBaselineRaw = yMax - pboScaled;
         const drawWidth = quantSubpixel(
           (xMax - xMin) * scaleXFactor * safeScreenScaleXPar,
         );
         const drawAscent = quantSubpixel(
-          Math.max(0, -yMin) * scaleYFactor * safeScreenScaleY,
+          Math.max(0, ascRaw) * scaleYFactor * safeScreenScaleY,
         );
         const drawDescent = quantSubpixel(
-          Math.max(0, yMax) * scaleYFactor * safeScreenScaleY,
+          Math.max(0, pboScaled) * scaleYFactor * safeScreenScaleY,
         );
 
         currentLine.items[currentLine.items.length] = {
@@ -606,7 +652,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
             ? { x: currentOrigin.x, y: currentOrigin.y }
             : null,
           drawingPath: path,
-          drawingBaseline: baselineOffset,
+          drawingBaseline: drawBaselineRaw,
           border,
           borderX,
           borderY,
@@ -748,11 +794,6 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           };
           tokenWidth = quantSubpixel(tokenWidth + width);
         }
-        if (runs.length > 1 && spacingScaled !== 0) {
-          tokenWidth = quantSubpixel(
-            tokenWidth + spacingScaled * (runs.length - 1),
-          );
-        }
 
         if (
           wrapStyle !== 2 &&
@@ -776,7 +817,6 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
         for (let r = 0; r < runRecords.length; r++) {
           const record = runRecords[r]!;
           const style = record.fontStyle;
-          const spacingAfter = r < runRecords.length - 1 ? spacingScaled : 0;
           currentLine.items[currentLine.items.length] = {
             font: record.font,
             fontSize: fontSizePx,
@@ -788,7 +828,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
             shaped: record.shaped,
             width: record.width,
             spacing: spacingScaled,
-            spacingAfter,
+            spacingAfter: 0,
             baseStyle,
             inlineStyle,
             animates: animateEffects,
@@ -842,7 +882,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           };
 
           currentLine.width = quantSubpixel(
-            currentLine.width + record.width + spacingAfter,
+            currentLine.width + record.width,
           );
           if (record.ascent > currentLine.ascent)
             currentLine.ascent = record.ascent;

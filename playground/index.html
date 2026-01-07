@@ -25,6 +25,10 @@
           <button id="play-pause" title="Play/Pause">▶</button>
           <input type="range" id="timeline" min="0" max="100" value="0" step="0.1">
           <span id="time-display">00:00.000 / 00:00.000</span>
+          <label class="toggle">
+            <input type="checkbox" id="render-mode">
+            <span>Render at PlayRes</span>
+          </label>
         </div>
       </div>
 
@@ -66,6 +70,66 @@
             <div class="status-row">
               <span class="label">Render:</span>
               <span id="render-status" class="value">idle</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="background-section">
+          <h2>Background</h2>
+          <div class="bg-controls">
+            <label>
+              <span>Mode</span>
+              <select id="bg-mode">
+                <option value="checker">Checker</option>
+                <option value="solid">Solid</option>
+                <option value="gradient">Gradient</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label>
+              <span>Color A</span>
+              <input type="color" id="bg-color-a" value="#1a1a1a">
+            </label>
+            <label>
+              <span>Color B</span>
+              <input type="color" id="bg-color-b" value="#0f0f0f">
+            </label>
+          </div>
+        </section>
+
+        <section class="perf-section">
+          <h2>Performance</h2>
+          <div id="perf-stats">
+            <div class="status-row">
+              <span class="label">Render:</span>
+              <span id="perf-render" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Composite:</span>
+              <span id="perf-composite" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Total:</span>
+              <span id="perf-total" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Layers:</span>
+              <span id="perf-layers" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Memory:</span>
+              <span id="perf-memory" class="value">-</span>
+            </div>
+          </div>
+          <div class="perf-graphs">
+            <div class="graph">
+              <span class="graph-label">Frame time (ms)</span>
+              <canvas id="perf-graph" width="240" height="60"></canvas>
+            </div>
+            <div class="graph">
+              <span class="graph-label">Frame bitmap (MB)</span>
+              <canvas id="memory-graph" width="240" height="60"></canvas>
             </div>
           </div>
         </section>

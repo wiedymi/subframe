@@ -110,6 +110,7 @@ main {
   padding: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
+  flex-wrap: wrap;
 }
 
 #play-pause {
@@ -160,6 +161,20 @@ main {
   white-space: nowrap;
   min-width: 140px;
   text-align: right;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.toggle input {
+  accent-color: var(--fg);
 }
 
 .panel {
@@ -231,6 +246,63 @@ main {
 .status-row .value {
   flex: 1;
   word-break: break-all;
+}
+
+.bg-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.bg-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.bg-controls select,
+.bg-controls input[type="color"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px;
+  font-family: var(--font);
+  font-size: 11px;
+  height: 28px;
+}
+
+.bg-controls input[type="color"] {
+  padding: 2px;
+  cursor: pointer;
+}
+
+.perf-graphs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.graph {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.graph-label {
+  font-size: 9px;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.graph canvas {
+  width: 100%;
+  height: 60px;
+  border: 1px solid var(--border);
+  background: #0f0f0f;
 }
 
 #font-list {

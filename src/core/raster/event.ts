@@ -13,15 +13,17 @@ import {
   rasterizePath,
 } from "text-shaper";
 import type { RasterizedGlyph } from "text-shaper";
-import { quantSubpixel } from "../math/fixed";
+import { quantSubpixel, SUBPIXEL_SCALE } from "../math/fixed";
 import type { ClipShape } from "../tags/types";
 import type { Line, LineItem } from "../layout/line";
 import {
   addBitmapClamped,
   fixOutlineBitmap,
+  maxBitmapClamped,
   normalizeLayerOrigin,
   shiftBitmapSubpixel,
   splitSubpixel,
+  subBitmapClamped,
 } from "../raster/bitmap";
 import {
   applyBeBlur,
@@ -40,6 +42,12 @@ const KARAOKE_CLIP_INF = 1_000_000_000;
 const SYNTHETIC_ITALIC_SHEAR = 0.2;
 const LIBASS_BBOX_EXPAND_MIN = 1;
 const LIBASS_BBOX_EXPAND_MAX = 127;
+// FT_Outline_EmboldenXY halves the input strength internally (see ftoutln.c),
+// but text-shaper emboldenPath expands by the full offset. Match libass by
+// halving the effective strength.
+const LIBASS_BOLD_STRENGTH_SCALE = 0.5;
+const OUTLINE_BIAS = 0.0;
+
 
 function shouldBlurFill(borderStyle: number, borderMax: number): boolean {
   return borderStyle === 3 || borderMax <= 0;
@@ -142,27 +150,29 @@ function applySyntheticPathEffects(
 
 function quantizePathInPlace(path: { commands: Array<any>; bounds?: any }): void {
   const cmds = path.commands;
+  const quant = (value: number): number =>
+    Math.round(value * SUBPIXEL_SCALE) / SUBPIXEL_SCALE;
   for (let i = 0; i < cmds.length; i++) {
     const cmd = cmds[i]!;
     switch (cmd.type) {
       case "M":
       case "L":
-        cmd.x = quantSubpixel(cmd.x);
-        cmd.y = quantSubpixel(cmd.y);
+        cmd.x = quant(cmd.x);
+        cmd.y = quant(cmd.y);
         break;
       case "Q":
-        cmd.x1 = quantSubpixel(cmd.x1);
-        cmd.y1 = quantSubpixel(cmd.y1);
-        cmd.x = quantSubpixel(cmd.x);
-        cmd.y = quantSubpixel(cmd.y);
+        cmd.x1 = quant(cmd.x1);
+        cmd.y1 = quant(cmd.y1);
+        cmd.x = quant(cmd.x);
+        cmd.y = quant(cmd.y);
         break;
       case "C":
-        cmd.x1 = quantSubpixel(cmd.x1);
-        cmd.y1 = quantSubpixel(cmd.y1);
-        cmd.x2 = quantSubpixel(cmd.x2);
-        cmd.y2 = quantSubpixel(cmd.y2);
-        cmd.x = quantSubpixel(cmd.x);
-        cmd.y = quantSubpixel(cmd.y);
+        cmd.x1 = quant(cmd.x1);
+        cmd.y1 = quant(cmd.y1);
+        cmd.x2 = quant(cmd.x2);
+        cmd.y2 = quant(cmd.y2);
+        cmd.x = quant(cmd.x);
+        cmd.y = quant(cmd.y);
         break;
       default:
         break;
@@ -232,22 +242,188 @@ function rasterizeFillFromPath(
   };
 }
 
+function splitPathContours(path: { commands: Array<any>; flags?: number }): Array<{ commands: Array<any>; flags?: number }> {
+  const contours: Array<{ commands: Array<any>; flags?: number }> = [];
+  let current: Array<any> = [];
+  for (let i = 0; i < path.commands.length; i++) {
+    const cmd = path.commands[i]!;
+    if (cmd.type === "M") {
+      if (current.length > 0) {
+        const last = current[current.length - 1];
+        if (!last || last.type !== "Z") current.push({ type: "Z" });
+        contours.push({ commands: current, flags: path.flags });
+      }
+      current = [cmd];
+      continue;
+    }
+    current[current.length] = cmd;
+    if (cmd.type === "Z") {
+      contours.push({ commands: current, flags: path.flags });
+      current = [];
+    }
+  }
+  if (current.length > 0) {
+    const last = current[current.length - 1];
+    if (!last || last.type !== "Z") current.push({ type: "Z" });
+    contours.push({ commands: current, flags: path.flags });
+  }
+  return contours;
+}
+
+function rasterizeFillUnionFromPath(
+  builder: PathBuilder,
+  flipY: boolean,
+): RasterizedGlyph | null {
+  const path = builder.toPath();
+  const contours = splitPathContours(path);
+  if (contours.length <= 1) {
+    return rasterizeFillFromPath(builder, flipY, FillRule.NonZero);
+  }
+
+  const rasters: RasterizedGlyph[] = [];
+  let minX = 0;
+  let minY = 0;
+  let maxX = 0;
+  let maxY = 0;
+  let haveBounds = false;
+  for (let i = 0; i < contours.length; i++) {
+    const contour = contours[i]!;
+    const contourBuilder = PathBuilder.fromPath(contour as any);
+    const raster = contourBuilder
+      ? rasterizeFillFromPath(contourBuilder, flipY, FillRule.NonZero)
+      : null;
+    if (!raster) continue;
+    const left = raster.bearingX;
+    const top = -raster.bearingY;
+    const right = left + raster.bitmap.width;
+    const bottom = top + raster.bitmap.rows;
+    if (!haveBounds) {
+      minX = left;
+      minY = top;
+      maxX = right;
+      maxY = bottom;
+      haveBounds = true;
+    } else {
+      if (left < minX) minX = left;
+      if (top < minY) minY = top;
+      if (right > maxX) maxX = right;
+      if (bottom > maxY) maxY = bottom;
+    }
+    rasters[rasters.length] = raster;
+  }
+  if (!haveBounds || rasters.length === 0) return null;
+
+  const width = Math.max(1, maxX - minX);
+  const height = Math.max(1, maxY - minY);
+  const bitmap = createBitmap(width, height, PixelMode.Gray);
+  for (let i = 0; i < rasters.length; i++) {
+    const raster = rasters[i]!;
+    maxBitmapClamped(
+      bitmap.buffer,
+      width,
+      height,
+      bitmap.pitch,
+      raster.bitmap.buffer,
+      raster.bitmap.width,
+      raster.bitmap.rows,
+      raster.bitmap.pitch,
+      raster.bearingX - minX,
+      -raster.bearingY - minY,
+    );
+  }
+  return {
+    bitmap,
+    bearingX: minX,
+    bearingY: -minY,
+  };
+}
+
 function rasterizeOutlineFromPath(
   builder: PathBuilder,
   borderX: number,
   borderY: number,
   flipY: boolean,
 ): RasterizedGlyph | null {
-  if (!(borderX > 0 || borderY > 0)) return null;
+  const biasedBorderX = borderX + OUTLINE_BIAS;
+  const biasedBorderY = borderY + OUTLINE_BIAS;
+  if (!(biasedBorderX > 0 || biasedBorderY > 0)) return null;
   const LIBASS_STROKER_EPS = 0.25;
-  const stroked = builder.clone().strokeAsymmetricCombined({
-    xBorder: borderX,
-    yBorder: borderY,
+  if (Math.abs(biasedBorderX - biasedBorderY) <= 1e-6) {
+    const stroked = builder.clone().stroke({
+      width: biasedBorderX * 2,
+      lineJoin: "round",
+    });
+    return rasterizeFillFromPath(stroked, flipY, FillRule.NonZero);
+  }
+  const combined = builder.clone().strokeAsymmetricCombined({
+    xBorder: biasedBorderX,
+    yBorder: biasedBorderY,
     eps: LIBASS_STROKER_EPS,
-    lineJoin: "miter",
-    miterLimit: 4,
+    lineJoin: "round",
   });
-  return rasterizeFillFromPath(stroked, flipY, FillRule.EvenOdd);
+  return rasterizeFillFromPath(combined, flipY, FillRule.NonZero);
+}
+
+function cloneRasterGlyph(
+  glyph: {
+    bitmap: {
+      buffer: Uint8Array;
+      width: number;
+      rows: number;
+      pitch: number;
+      pixelMode?: PixelMode;
+      numGrays?: number;
+    };
+    bearingX: number;
+    bearingY: number;
+  },
+): {
+  bitmap: {
+    buffer: Uint8Array;
+    width: number;
+    rows: number;
+    pitch: number;
+    pixelMode?: PixelMode;
+    numGrays?: number;
+  };
+  bearingX: number;
+  bearingY: number;
+} {
+  const bm = glyph.bitmap;
+  return {
+    bitmap: {
+      buffer: bm.buffer.slice(),
+      width: bm.width,
+      rows: bm.rows,
+      pitch: bm.pitch,
+      pixelMode: bm.pixelMode,
+      numGrays: bm.numGrays,
+    },
+    bearingX: glyph.bearingX,
+    bearingY: glyph.bearingY,
+  };
+}
+
+const glyphBoundsCache = new WeakMap<
+  LineItem["font"],
+  Map<number, { xMin: number; yMin: number; xMax: number; yMax: number }>
+>();
+
+function getGlyphBoundsCached(
+  font: LineItem["font"],
+  glyphId: number,
+): { xMin: number; yMin: number; xMax: number; yMax: number } | null {
+  let cache = glyphBoundsCache.get(font);
+  if (!cache) {
+    cache = new Map();
+    glyphBoundsCache.set(font, cache);
+  }
+  const cached = cache.get(glyphId);
+  if (cached) return cached;
+  const bounds = font.getGlyphBounds(glyphId);
+  if (!bounds) return null;
+  cache.set(glyphId, bounds);
+  return bounds;
 }
 
 export type RenderLinesInput = {
@@ -308,6 +484,10 @@ export function renderEventLines(input: RenderLinesInput): void {
     glyphMeta?: { glyphIndex?: number; glyphId?: number },
   ) => {
     normalizeLayerOrigin(layer);
+    if (extraClip || layer.clip) {
+      // Avoid mutating shared/cached bitmaps when clipping.
+      layer.bitmap = layer.bitmap.slice();
+    }
     if (extraClip) applyClip(layer, extraClip);
     if (layer.clip) applyClip(layer, layer.clip);
     if (traceEvent) {
@@ -364,6 +544,8 @@ export function renderEventLines(input: RenderLinesInput): void {
 
     const segStartX = new Map<number, number>();
     const segWidth = new Map<number, number>();
+    let lineMinX = 0;
+    let lineMaxX = lineWidth;
     let segCursor = 0;
     for (let ii = 0; ii < line.items.length; ii++) {
       const item = line.items[ii]!;
@@ -372,6 +554,62 @@ export function renderEventLines(input: RenderLinesInput): void {
         segStartX.set(item.segmentIndex, segCursor);
       const prev = segWidth.get(item.segmentIndex) ?? 0;
       segWidth.set(item.segmentIndex, prev + segAdvance);
+      if (item.drawingPath?.bounds) {
+        const b = item.drawingPath.bounds;
+        const drawScaleX = item.scaleXFactor * safeScreenScaleXPar;
+        const minX = quantSubpixel(segCursor + b.xMin * drawScaleX);
+        const maxX = quantSubpixel(segCursor + b.xMax * drawScaleX);
+        if (minX < lineMinX) lineMinX = minX;
+        if (maxX > lineMaxX) lineMaxX = maxX;
+      } else if (item.shaped) {
+        const positions = item.shaped.positions;
+        const infos = item.shaped.infos;
+        let pen = segCursor;
+        const scaleX = item.scaleX;
+        const scaleY = item.scaleY;
+        const italicSlant = item.syntheticItalic ? SYNTHETIC_ITALIC_SHEAR : 0;
+        const boldStrength = item.syntheticBold
+          ? (item.fontSize / 64) * LIBASS_BOLD_STRENGTH_SCALE
+          : 0;
+        for (let gi = 0; gi < positions.length; gi++) {
+          const pos = positions[gi]!;
+          const glyphId = infos[gi]!.glyphId;
+          const xOffset = quantSubpixel(pos.xOffset * scaleX);
+          const xAdvance = quantSubpixel(pos.xAdvance * scaleX);
+          const bounds = getGlyphBoundsCached(item.font, glyphId);
+          if (bounds) {
+            let xMin = bounds.xMin * scaleX;
+            let xMax = bounds.xMax * scaleX;
+            if (italicSlant !== 0) {
+              const yMin = bounds.yMin * scaleY;
+              const yMax = bounds.yMax * scaleY;
+              const x0 = xMin + yMin * italicSlant;
+              const x1 = xMin + yMax * italicSlant;
+              const x2 = xMax + yMin * italicSlant;
+              const x3 = xMax + yMax * italicSlant;
+              xMin = Math.min(x0, x1, x2, x3);
+              xMax = Math.max(x0, x1, x2, x3);
+            }
+            if (boldStrength > 0) {
+              xMin -= boldStrength;
+              xMax += boldStrength;
+            }
+            const minX = quantSubpixel(pen + xOffset + xMin);
+            const maxX = quantSubpixel(pen + xOffset + xMax);
+            if (minX < lineMinX) lineMinX = minX;
+            if (maxX > lineMaxX) lineMaxX = maxX;
+          } else {
+            const gx = quantSubpixel(pen + xOffset);
+            const endX = quantSubpixel(gx + xAdvance);
+            if (gx < lineMinX) lineMinX = gx;
+            if (endX > lineMaxX) lineMaxX = endX;
+          }
+          const isLast = gi === positions.length - 1;
+          const advance =
+            xAdvance + (isLast ? item.spacingAfter : item.spacing);
+          pen = quantSubpixel(pen + advance);
+        }
+      }
       segCursor = quantSubpixel(segCursor + segAdvance);
     }
 
@@ -384,11 +622,11 @@ export function renderEventLines(input: RenderLinesInput): void {
       }
     } else {
       if (hAlign === 2) {
-        xStart = posX - lineWidth / 2;
+        xStart = posX - (lineMinX + lineMaxX) / 2;
       } else if (hAlign === 0) {
-        xStart = posX - lineWidth;
+        xStart = posX - lineMaxX;
       } else {
-        xStart = posX;
+        xStart = posX - lineMinX;
       }
     }
 
@@ -502,7 +740,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           originX: baseX + sg.bearingX,
           originY: baseY - sg.bearingY,
           color: boxShadowColor,
-          z: ev.layer - 1,
+          z: ev.layer,
           clip: clip ?? undefined,
         } as BitmapLayer;
         pushLayer(
@@ -556,7 +794,9 @@ export function renderEventLines(input: RenderLinesInput): void {
       const segStart = segStartX.get(item.segmentIndex) ?? 0;
       const segW = segWidth.get(item.segmentIndex) ?? item.width;
       // libass embolden strength ~= fontSize / 64 (see ass_font.c ass_glyph_embolden)
-      const boldStrength = item.syntheticBold ? item.fontSize / 64 : 0;
+      const boldStrength = item.syntheticBold
+        ? (item.fontSize / 64) * LIBASS_BOLD_STRENGTH_SCALE
+        : 0;
       let karaokeSplitX: number | null = null;
       let karaokeFillColor = primaryBase;
       let karaokeFillPrimary = primaryBase;
@@ -603,6 +843,8 @@ export function renderEventLines(input: RenderLinesInput): void {
       const fillSecondaryFinal = applyFade(karaokeFillSecondary, fade);
       const outlineColor = applyFade(outlineBase, fade);
       const shadowColor = applyFade(shadowBase, fade);
+
+      const combineAllowed = combineEnabled;
 
       if (traceLine) {
         pushTraceGlyph(traceLine, {
@@ -659,10 +901,16 @@ export function renderEventLines(input: RenderLinesInput): void {
           item.shearX,
           item.shearY,
         );
-        const gx = penX;
-        const gy = baselineY;
+        let gx = quantizeTransformPos(penX);
+        let gy = quantizeTransformPos(baselineY - item.ascent);
         let px = gx;
         let py = gy;
+        let qOriginX = originX;
+        let qOriginY = originY;
+        if (useTransform) {
+          qOriginX = quantizeTransformPos(originX);
+          qOriginY = quantizeTransformPos(originY);
+        }
 
         let builder = PathBuilder.fromPath(item.drawingPath);
         const drawScaleX = item.scaleXFactor * safeScreenScaleXPar;
@@ -674,8 +922,8 @@ export function renderEventLines(input: RenderLinesInput): void {
           const matrix = buildTransformMatrix(
             gx,
             gy,
-            originX,
-            originY,
+            qOriginX,
+            qOriginY,
             item.rotateZ,
             item.rotateX,
             item.rotateY,
@@ -762,15 +1010,16 @@ export function renderEventLines(input: RenderLinesInput): void {
 
           if (!useBox && (sx !== 0 || sy !== 0)) {
             const sg = og ?? fg;
+            const shadowGlyph = cloneRasterGlyph(sg);
             const layer = {
-              bitmap: sg.bitmap.buffer,
-              width: sg.bitmap.width,
-              height: sg.bitmap.rows,
-              stride: sg.bitmap.pitch,
-              originX: px + sg.bearingX + sx,
-              originY: py - sg.bearingY + sy,
+              bitmap: shadowGlyph.bitmap.buffer,
+              width: shadowGlyph.bitmap.width,
+              height: shadowGlyph.bitmap.rows,
+              stride: shadowGlyph.bitmap.pitch,
+              originX: px + shadowGlyph.bearingX + sx,
+              originY: py - shadowGlyph.bearingY + sy,
               color: shadowColor,
-              z: ev.layer - 1,
+              z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
             pushLayer(layer, "shadow", item, pad);
@@ -805,7 +1054,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad);
@@ -818,7 +1067,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad);
@@ -831,7 +1080,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(leftLayer, "fill", item, pad, {
@@ -850,7 +1099,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(rightLayer, "fill", item, pad, {
@@ -871,7 +1120,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               originX: fgOriginX,
               originY: fgOriginY,
               color: fillSolidFinal,
-              z: ev.layer + 1,
+              z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
             pushLayer(layer, "fill", item, pad);
@@ -896,7 +1145,7 @@ export function renderEventLines(input: RenderLinesInput): void {
         item.shearY !== 0 ||
         item.rotateX !== 0 ||
         item.rotateY !== 0;
-      if (!itemHasTransform && combineEnabled) {
+      if (!itemHasTransform && combineAllowed) {
         const fillGlyphs: Array<{
           bitmap: {
             buffer: Uint8Array;
@@ -927,22 +1176,26 @@ export function renderEventLines(input: RenderLinesInput): void {
         for (let gi = 0; gi < infos.length; gi++) {
           const glyphId = infos[gi]!.glyphId;
           const pos = positions[gi]!;
+          const info = infos[gi]!;
 
           const xOffset = quantSubpixel(pos.xOffset * scaleX);
           const yOffset = quantSubpixel(pos.yOffset * scaleY);
           const xAdvance = quantSubpixel(pos.xAdvance * scaleX);
-          const isLastGlyph = gi === infos.length - 1;
-          const advance =
-            xAdvance + (isLastGlyph ? item.spacingAfter : item.spacing);
+          const advance = xAdvance + item.spacing;
 
-          const gx = quantSubpixel(glyphPenX + xOffset);
-          let gy = quantSubpixel(baselineY - yOffset);
+          const gxAligned = quantSubpixel(glyphPenX + xOffset);
+          const gyAligned = quantSubpixel(baselineY - yOffset);
+          let gx = gxAligned;
+          let gy = gyAligned;
           if (shearYAdj !== 0) {
             gy = quantSubpixel(gy + baselineShear + shearYAdj * xOffset);
             baselineShear = quantSubpixel(
               baselineShear + shearYAdj * xAdvance,
             );
           }
+          gx = quantizeTransformPos(gx);
+          gy = quantizeTransformPos(gy);
+
 
           const useBox = item.borderStyle === 3;
           const borderMax = Math.max(item.borderX, item.borderY);
@@ -1182,15 +1435,16 @@ export function renderEventLines(input: RenderLinesInput): void {
             const sy = quantizeShadowOffset(syRaw, item.shadowMaskY);
             if (sx !== 0 || sy !== 0) {
               const sg = og ?? fg;
+              const shadowGlyph = cloneRasterGlyph(sg);
               const layer = {
-                bitmap: sg.bitmap.buffer,
-                width: sg.bitmap.width,
-                height: sg.bitmap.rows,
-                stride: sg.bitmap.pitch,
-                originX: baseOriginX + sg.bearingX + sx,
-                originY: baseOriginY - sg.bearingY + sy,
+                bitmap: shadowGlyph.bitmap.buffer,
+                width: shadowGlyph.bitmap.width,
+                height: shadowGlyph.bitmap.rows,
+                stride: shadowGlyph.bitmap.pitch,
+                originX: baseOriginX + shadowGlyph.bearingX + sx,
+                originY: baseOriginY - shadowGlyph.bearingY + sy,
                 color: shadowColor,
-                z: ev.layer - 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "shadow", item, pad);
@@ -1226,7 +1480,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad);
@@ -1239,7 +1493,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad);
@@ -1252,7 +1506,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(leftLayer, "fill", item, pad, {
@@ -1271,7 +1525,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(rightLayer, "fill", item, pad, {
@@ -1292,7 +1546,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               originX: fgOriginX,
               originY: fgOriginY,
               color: fillSolidFinal,
-              z: ev.layer + 1,
+              z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
             pushLayer(layer, "fill", item, pad);
@@ -1307,21 +1561,27 @@ export function renderEventLines(input: RenderLinesInput): void {
         const glyphId = infos[gi]!.glyphId;
         const glyphMeta = { glyphIndex: gi, glyphId };
         const pos = positions[gi]!;
+        const info = infos[gi]!;
 
         const xOffset = quantSubpixel(pos.xOffset * scaleX);
         const yOffset = quantSubpixel(pos.yOffset * scaleY);
         const xAdvance = quantSubpixel(pos.xAdvance * scaleX);
-        const isLastGlyph = gi === infos.length - 1;
-        const advance =
-          xAdvance + (isLastGlyph ? item.spacingAfter : item.spacing);
+        const advance = xAdvance + item.spacing;
 
-        const gx = quantSubpixel(penX + xOffset);
         const useTransform = itemHasTransform;
-        let gy = quantSubpixel(baselineY - yOffset);
+        const gxAligned = quantSubpixel(penX + xOffset);
+        const gyAligned = quantSubpixel(baselineY - yOffset);
+        let gx = gxAligned;
+        let gy = gyAligned;
         if (shearYAdj !== 0) {
           gy = quantSubpixel(gy + baselineShear + shearYAdj * xOffset);
           baselineShear = quantSubpixel(baselineShear + shearYAdj * xAdvance);
         }
+        if (!useTransform) {
+          gx = quantizeTransformPos(gx);
+          gy = quantizeTransformPos(gy);
+        }
+
         let px = gx;
         let py = gy;
         let qgx = gx;
@@ -1466,15 +1726,16 @@ export function renderEventLines(input: RenderLinesInput): void {
             const sy = quantizeShadowOffset(syRaw, item.shadowMaskY);
             if (sx !== 0 || sy !== 0) {
               const sg = og ?? fg;
+              const shadowGlyph = cloneRasterGlyph(sg);
               const layer = {
-                bitmap: sg.bitmap.buffer,
-                width: sg.bitmap.width,
-                height: sg.bitmap.rows,
-                stride: sg.bitmap.pitch,
-                originX: px + sg.bearingX + sx,
-                originY: py - sg.bearingY + sy,
+                bitmap: shadowGlyph.bitmap.buffer,
+                width: shadowGlyph.bitmap.width,
+                height: shadowGlyph.bitmap.rows,
+                stride: shadowGlyph.bitmap.pitch,
+                originX: px + shadowGlyph.bearingX + sx,
+                originY: py - shadowGlyph.bearingY + sy,
                 color: shadowColor,
-                z: ev.layer - 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "shadow", item, pad, undefined, glyphMeta);
@@ -1510,7 +1771,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
@@ -1523,7 +1784,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
@@ -1536,7 +1797,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillPrimaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(
@@ -1562,7 +1823,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 originX: fgOriginX,
                 originY: fgOriginY,
                 color: fillSecondaryFinal,
-                z: ev.layer + 1,
+                z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
               pushLayer(
@@ -1590,7 +1851,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               originX: fgOriginX,
               originY: fgOriginY,
               color: fillSolidFinal,
-              z: ev.layer + 1,
+              z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
             pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
@@ -1662,7 +1923,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           originX: xStart + glyph.bearingX,
           originY: yPos - glyph.bearingY,
           color,
-          z: ev.layer + 1,
+          z: ev.layer,
           clip: clip ?? undefined,
         } as BitmapLayer;
         pushLayer(layer, "fill", line.items[0]!, 0);

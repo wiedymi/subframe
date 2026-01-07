@@ -2,6 +2,13 @@ import type { Effect } from "subforge/core";
 import type { ClipShape } from "../tags/types";
 import { buildClipMask, parseClipRect } from "./parser";
 
+function roundAwayFromZero(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const abs = Math.abs(value);
+  const rounded = Math.floor(abs + 0.5);
+  return value < 0 ? -rounded : rounded;
+}
+
 export function findClipEffect(
   effects: Effect[],
   screenScaleX: number,
@@ -14,10 +21,10 @@ export function findClipEffect(
       const rect = parseClipRect(params.path);
       if (rect) {
         // libass rounds clip bounds to integer screen coordinates.
-        const x0 = Math.round(rect.x0 * screenScaleX);
-        const y0 = Math.round(rect.y0 * screenScaleY);
-        const x1 = Math.round(rect.x1 * screenScaleX);
-        const y1 = Math.round(rect.y1 * screenScaleY);
+        const x0 = roundAwayFromZero(rect.x0 * screenScaleX);
+        const y0 = roundAwayFromZero(rect.y0 * screenScaleY);
+        const x1 = roundAwayFromZero(rect.x1 * screenScaleX);
+        const y1 = roundAwayFromZero(rect.y1 * screenScaleY);
         return { type: "rect", x0, y0, x1, y1, inverse: params.inverse };
       }
       const mask = buildClipMask(
@@ -45,8 +52,8 @@ export function applyClip(
 ): void {
   const { bitmap, width, height, stride, originX, originY } = layer;
   // Match libass-style integer placement: clip should use the same rounded origin as compositing.
-  const baseX = Math.round(originX);
-  const baseY = Math.round(originY);
+  const baseX = roundAwayFromZero(originX);
+  const baseY = roundAwayFromZero(originY);
   if (clip.type === "rect") {
     const x0 = clip.x0;
     const y0 = clip.y0;

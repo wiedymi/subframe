@@ -2,8 +2,8 @@
   "width": 1920,
   "height": 1080,
   "maxError": 255,
-  "meanError": 6.921897183641975,
-  "pixelsOver": 81354,
-  "pctOver": 3.9233217592592595,
+  "meanError": 1.6344222608024692,
+  "pixelsOver": 49327,
+  "pctOver": 2.378809799382716,
   "tolerance": 1
 }
