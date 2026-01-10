@@ -1,8 +1,23 @@
 {
   "name": "subframe",
-  "version": "0.0.1",
-  "description": "Placeholder package to reserve npm name; will be updated soon with full implementation and docs",
+  "version": "0.1.0",
+  "description": "Deterministic subtitle renderer for web and Bun with libass-style parity goals",
   "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./src/index.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/wiedymi/subframe.git"
+  },
+  "homepage": "https://github.com/wiedymi/subframe",
   "devDependencies": {
     "pngjs": "^7.0.0"
   },
@@ -11,6 +26,7 @@
     "text-shaper": "0.1.17"
   },
   "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm",
     "playground": "bun playground/index.html",
     "test:golden": "bun run tools/run-golden.ts",
     "test:golden:smoke": "bun run tools/run-golden.ts -- --case parity_smoke",

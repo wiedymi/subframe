@@ -24,6 +24,12 @@ bun playground/index.html
 ```
 Default backend selection order: WebGPU → WebGL → CPU.
 
+## Build
+```
+bun run build
+```
+Outputs ESM bundle to `dist/`.
+
 ## Parity quickstart (smoke)
 1) Build libass (submodule): `tools/ref/build_libass.sh`
 2) Build the render helper (see `tools/ref/README.md`)
