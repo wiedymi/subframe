@@ -6,7 +6,7 @@
 [![Discord](https://img.shields.io/badge/-Discord-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/zemMZtrkSb)
 [![Support me](https://img.shields.io/badge/-Support%20me-ff69b4?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/vivy-company)
 
-Subframe is a WebGL-first subtitle renderer that renders Subforge `SubtitleDocument` directly and targets libass visual parity for ASS/SSA on web and Bun. The core is CPU-rendered and deterministic; GPU backends only composite bitmaps.
+Subframe is a subtitle renderer that renders Subforge `SubtitleDocument` directly and targets libass visual parity for ASS/SSA on web and Bun. The core is CPU-rendered and deterministic; GPU backends only composite bitmaps.
 
 ## Status
 - Early but working. Visual parity is focused on the documented scope in `docs/GOALS.md`.

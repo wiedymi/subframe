@@ -1,7 +1,7 @@
 # Goals for subframe
 
 ## Vision
-Build a WebGL-first subtitle renderer that consumes Subforge `SubtitleDocument` and targets **full ASS spec rendering with 1:1 visual parity vs libass** on web and Bun, with a WebGPU compositor backend available.
+Build a subtitle renderer that consumes Subforge `SubtitleDocument` and targets **full ASS spec rendering with 1:1 visual parity vs libass** on web and Bun, with WebGL/WebGPU compositor backends available.
 Other subtitle formats are rendered via Subforge conversion; parity is only guaranteed for ASS/SSA.
 
 ## v0 scope (must-have)
