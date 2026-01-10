@@ -99,6 +99,7 @@ let historyCount = 0;
 let webglBackend: CompositorBackend | null = null;
 let webgpuBackend: CompositorBackend | null = null;
 let webgpuBackendPromise: Promise<CompositorBackend | null> | null = null;
+let defaultBackendSelected = false;
 
 function log(msg: string, level: "info" | "warn" | "error" = "info") {
   const time = new Date().toISOString().slice(11, 23);
@@ -271,6 +272,27 @@ async function ensureWebGPUBackend(): Promise<CompositorBackend | null> {
   })();
 
   return webgpuBackendPromise;
+}
+
+async function selectDefaultBackend(): Promise<void> {
+  if (defaultBackendSelected) return;
+  defaultBackendSelected = true;
+
+  state.backend = "webgpu";
+  backendSelect.value = "webgpu";
+  updateBackendVisibility();
+  const gpu = await ensureWebGPUBackend();
+  if (gpu) return;
+
+  state.backend = "webgl";
+  backendSelect.value = "webgl";
+  updateBackendVisibility();
+  const gl = ensureWebGLBackend();
+  if (gl) return;
+
+  state.backend = "cpu";
+  backendSelect.value = "cpu";
+  updateBackendVisibility();
 }
 
 function updateFontList() {
@@ -1153,6 +1175,13 @@ function init() {
   updateTimeDisplay();
   log("Playground initialized (timer mode - no video required)");
   void queryLocalFonts();
+  void selectDefaultBackend().then(() => {
+    state.lastRenderTime = -1;
+    resizeCanvas();
+    state.prewarmed = false;
+    state.prewarmPromise = null;
+    renderCurrentFrame();
+  });
 
   const cleanupFn = () => {
     if (state.timerAnimationId !== null) {
