@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "subforge": "0.1.3",
-    "text-shaper": "file:/Users/uyakauleu/vivy/experiments/text-shaper"
+    "text-shaper": "0.1.17"
   },
   "scripts": {
     "playground": "bun playground/index.html",

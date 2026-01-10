@@ -8,7 +8,9 @@ dist/
 # Test artifacts
 test/actual/
 test/diff/
+test/expected/
 *.log
+*.profraw
 
 # OS
 .DS_Store
