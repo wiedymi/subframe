@@ -74,9 +74,9 @@ Notes:
 - `BitmapLayer`: alpha bitmap + origin + size + color + z
 - `RenderItem`: final composited quad (texture + transform + color)
 
-## Backend boundary (planned)
+## Backend boundary
 - Core already produces `BitmapLayer[]` per frame.
-- Future backends will handle atlas placement and compositing only.
+- WebGL/WebGPU backends handle atlas placement and compositing only.
 - No layout or filter logic in backend code.
 
 ## Determinism rules

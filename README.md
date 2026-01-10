@@ -22,6 +22,7 @@ Subframe is a WebGL-first subtitle renderer that renders Subforge `SubtitleDocum
 ```
 bun playground/index.html
 ```
+Default backend selection order: WebGPU → WebGL → CPU.
 
 ## Parity quickstart (smoke)
 1) Build libass (submodule): `tools/ref/build_libass.sh`
