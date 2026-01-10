@@ -34,9 +34,31 @@ import {
   quantizeTransformPos,
 } from "../filters/blur";
 import { applyClip } from "../clip/apply";
-import { applyFade } from "../animate/fade";
+import { applyAnimateColors } from "../animate/apply";
+import { applyFade, fadeFactorComplex, fadeFactorSimple } from "../animate/fade";
 import { itemRotateOrShear } from "../transform/affine";
 import { buildTransformMatrix, flipYMatrix3, transformPoint } from "../transform/matrix";
+
+export type CacheLayerRole =
+  | "fillSolid"
+  | "fillPrimary"
+  | "fillSecondary"
+  | "outline"
+  | "shadow"
+  | "box";
+
+export type CacheLayerTemplate = {
+  lineIndex: number;
+  itemIndex: number;
+  role: CacheLayerRole;
+  bitmap: Uint8Array;
+  width: number;
+  height: number;
+  stride: number;
+  originX: number;
+  originY: number;
+  z: number;
+};
 
 const KARAOKE_CLIP_INF = 1_000_000_000;
 const SYNTHETIC_ITALIC_SHEAR = 0.2;
@@ -47,6 +69,149 @@ const LIBASS_BBOX_EXPAND_MAX = 127;
 // halving the effective strength.
 const LIBASS_BOLD_STRENGTH_SCALE = 0.5;
 const OUTLINE_BIAS = 0.0;
+
+const GLYPH_RASTER_CACHE_LIMIT = 4096;
+const GLYPH_RASTER_KEY_SCALE = 1e4;
+const glyphFillCache = new WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>();
+const glyphOutlineCache = new WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>();
+const COMBINED_RASTER_CACHE_LIMIT = 1024;
+const combinedRasterCache = new WeakMap<
+  LineItem["font"],
+  Map<
+    string,
+    {
+      fg: RasterizedGlyph;
+      og: RasterizedGlyph | null;
+      offsetX: number;
+      offsetY: number;
+      pad: number;
+    }
+  >
+>();
+
+function quantKey(value: number, scale: number = GLYPH_RASTER_KEY_SCALE): number {
+  return Math.round(value * scale);
+}
+
+function fillCacheKey(
+  glyphId: number,
+  scaleX: number,
+  scaleY: number,
+  italic: boolean,
+  boldStrength: number,
+): string {
+  return `${glyphId}|${quantKey(scaleX)}|${quantKey(scaleY)}|${italic ? 1 : 0}|${quantKey(
+    boldStrength,
+    1e3,
+  )}`;
+}
+
+function outlineCacheKey(
+  glyphId: number,
+  scaleX: number,
+  scaleY: number,
+  italic: boolean,
+  boldStrength: number,
+  borderX: number,
+  borderY: number,
+): string {
+  return `${glyphId}|${quantKey(scaleX)}|${quantKey(scaleY)}|${italic ? 1 : 0}|${quantKey(
+    boldStrength,
+    1e3,
+  )}|${quantKey(borderX)}|${quantKey(borderY)}`;
+}
+
+function getRasterCache(
+  store: WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>,
+  font: LineItem["font"],
+  key: string,
+): RasterizedGlyph | null {
+  const map = store.get(font);
+  if (!map) return null;
+  const value = map.get(key) ?? null;
+  if (value) {
+    map.delete(key);
+    map.set(key, value);
+  }
+  return value;
+}
+
+function setRasterCache(
+  store: WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>,
+  font: LineItem["font"],
+  key: string,
+  value: RasterizedGlyph,
+): void {
+  let map = store.get(font);
+  if (!map) {
+    map = new Map();
+    store.set(font, map);
+  }
+  map.set(key, value);
+  if (map.size > GLYPH_RASTER_CACHE_LIMIT) {
+    const first = map.keys().next();
+    if (!first.done) map.delete(first.value);
+  }
+}
+
+function combinedCacheKey(
+  item: LineItem,
+  scaleX: number,
+  scaleY: number,
+  boldStrength: number,
+  penSubX: number,
+  penSubY: number,
+  fillOpaque: boolean,
+): string {
+  return [
+    item.text,
+    quantKey(scaleX),
+    quantKey(scaleY),
+    quantKey(item.spacing, 1e3),
+    quantKey(item.borderX),
+    quantKey(item.borderY),
+    item.borderStyle,
+    quantKey(item.blurSigmaX, 1e3),
+    quantKey(item.blurSigmaY, 1e3),
+    quantKey(item.edgeBlur, 1e3),
+    item.syntheticItalic ? 1 : 0,
+    quantKey(boldStrength, 1e3),
+    penSubX,
+    penSubY,
+    fillOpaque ? 1 : 0,
+  ].join("|");
+}
+
+function getCombinedCache(
+  font: LineItem["font"],
+  key: string,
+): { fg: RasterizedGlyph; og: RasterizedGlyph | null; offsetX: number; offsetY: number; pad: number } | null {
+  const map = combinedRasterCache.get(font);
+  if (!map) return null;
+  const value = map.get(key) ?? null;
+  if (value) {
+    map.delete(key);
+    map.set(key, value);
+  }
+  return value;
+}
+
+function setCombinedCache(
+  font: LineItem["font"],
+  key: string,
+  value: { fg: RasterizedGlyph; og: RasterizedGlyph | null; offsetX: number; offsetY: number; pad: number },
+): void {
+  let map = combinedRasterCache.get(font);
+  if (!map) {
+    map = new Map();
+    combinedRasterCache.set(font, map);
+  }
+  map.set(key, value);
+  if (map.size > COMBINED_RASTER_CACHE_LIMIT) {
+    const first = map.keys().next();
+    if (!first.done) map.delete(first.value);
+  }
+}
 
 
 function shouldBlurFill(borderStyle: number, borderMax: number): boolean {
@@ -404,6 +569,12 @@ function cloneRasterGlyph(
   };
 }
 
+function itemFadeFactor(item: LineItem, timeMs: number, ev: SubtitleEvent): number {
+  if (item.fadeComplex) return fadeFactorComplex(timeMs, ev, item.fadeComplex);
+  if (item.fadeSimple) return fadeFactorSimple(timeMs, ev, item.fadeSimple.in, item.fadeSimple.out);
+  return item.fadeFactor ?? 1;
+}
+
 const glyphBoundsCache = new WeakMap<
   LineItem["font"],
   Map<number, { xMin: number; yMin: number; xMax: number; yMax: number }>
@@ -447,6 +618,7 @@ export type RenderLinesInput = {
   safeBlurScaleY: number;
   layers: BitmapLayer[];
   traceEvent: TraceEvent | null;
+  cacheTemplates?: CacheLayerTemplate[];
 };
 
 export function renderEventLines(input: RenderLinesInput): void {
@@ -471,10 +643,13 @@ export function renderEventLines(input: RenderLinesInput): void {
     safeBlurScaleY,
     layers,
     traceEvent,
+    cacheTemplates,
   } = input;
   const hAlign = align % 3;
 
   let penY = topY;
+  let cacheLineIndex = -1;
+  let cacheItemIndex = -1;
   const pushLayer = (
     layer: BitmapLayer,
     kind: TraceLayer["kind"],
@@ -482,14 +657,17 @@ export function renderEventLines(input: RenderLinesInput): void {
     padding: number,
     extraClip?: ClipShape,
     glyphMeta?: { glyphIndex?: number; glyphId?: number },
+    cacheRole?: CacheLayerRole,
   ) => {
-    normalizeLayerOrigin(layer);
-    if (extraClip || layer.clip) {
-      // Avoid mutating shared/cached bitmaps when clipping.
+    const needsClip = !!extraClip || !!layer.clip;
+    if (needsClip) {
+      // Clone before normalization to avoid mutating shared bitmaps.
       layer.bitmap = layer.bitmap.slice();
     }
+    normalizeLayerOrigin(layer);
     if (extraClip) applyClip(layer, extraClip);
     if (layer.clip) applyClip(layer, layer.clip);
+    if (layer.width <= 0 || layer.height <= 0) return;
     if (traceEvent) {
       traceEvent.layerCount++;
       const traceLayer: TraceLayer = {
@@ -536,81 +714,124 @@ export function renderEventLines(input: RenderLinesInput): void {
       }
       traceEvent.layers[traceEvent.layers.length] = traceLayer;
     }
+    if (
+      cacheTemplates &&
+      cacheRole &&
+      cacheLineIndex >= 0 &&
+      cacheItemIndex >= 0
+    ) {
+      cacheTemplates[cacheTemplates.length] = {
+        lineIndex: cacheLineIndex,
+        itemIndex: cacheItemIndex,
+        role: cacheRole,
+        bitmap: layer.bitmap,
+        width: layer.width,
+        height: layer.height,
+        stride: layer.stride,
+        originX: layer.originX,
+        originY: layer.originY,
+        z: layer.z,
+      };
+    }
     layers[layers.length] = layer;
   };
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li]!;
+    cacheLineIndex = li;
     const lineWidth = line.width;
 
-    const segStartX = new Map<number, number>();
-    const segWidth = new Map<number, number>();
-    let lineMinX = 0;
-    let lineMaxX = lineWidth;
-    let segCursor = 0;
-    for (let ii = 0; ii < line.items.length; ii++) {
-      const item = line.items[ii]!;
-      const segAdvance = item.width + item.spacingAfter;
-      if (!segStartX.has(item.segmentIndex))
-        segStartX.set(item.segmentIndex, segCursor);
-      const prev = segWidth.get(item.segmentIndex) ?? 0;
-      segWidth.set(item.segmentIndex, prev + segAdvance);
-      if (item.drawingPath?.bounds) {
-        const b = item.drawingPath.bounds;
-        const drawScaleX = item.scaleXFactor * safeScreenScaleXPar;
-        const minX = quantSubpixel(segCursor + b.xMin * drawScaleX);
-        const maxX = quantSubpixel(segCursor + b.xMax * drawScaleX);
-        if (minX < lineMinX) lineMinX = minX;
-        if (maxX > lineMaxX) lineMaxX = maxX;
-      } else if (item.shaped) {
-        const positions = item.shaped.positions;
-        const infos = item.shaped.infos;
-        let pen = segCursor;
-        const scaleX = item.scaleX;
-        const scaleY = item.scaleY;
-        const italicSlant = item.syntheticItalic ? SYNTHETIC_ITALIC_SHEAR : 0;
-        const boldStrength = item.syntheticBold
-          ? (item.fontSize / 64) * LIBASS_BOLD_STRENGTH_SCALE
-          : 0;
-        for (let gi = 0; gi < positions.length; gi++) {
-          const pos = positions[gi]!;
-          const glyphId = infos[gi]!.glyphId;
-          const xOffset = quantSubpixel(pos.xOffset * scaleX);
-          const xAdvance = quantSubpixel(pos.xAdvance * scaleX);
-          const bounds = getGlyphBoundsCached(item.font, glyphId);
-          if (bounds) {
-            let xMin = bounds.xMin * scaleX;
-            let xMax = bounds.xMax * scaleX;
-            if (italicSlant !== 0) {
-              const yMin = bounds.yMin * scaleY;
-              const yMax = bounds.yMax * scaleY;
-              const x0 = xMin + yMin * italicSlant;
-              const x1 = xMin + yMax * italicSlant;
-              const x2 = xMax + yMin * italicSlant;
-              const x3 = xMax + yMax * italicSlant;
-              xMin = Math.min(x0, x1, x2, x3);
-              xMax = Math.max(x0, x1, x2, x3);
+    let segStartX: number[];
+    let segWidth: number[];
+    let lineMinX: number;
+    let lineMaxX: number;
+    const hasCachedMetrics =
+      !!line.cacheable &&
+      !!line.segStartX &&
+      !!line.segWidth &&
+      line.minX !== undefined &&
+      line.maxX !== undefined;
+    if (hasCachedMetrics) {
+      segStartX = line.segStartX!;
+      segWidth = line.segWidth!;
+      lineMinX = line.minX as number;
+      lineMaxX = line.maxX as number;
+    } else {
+      segStartX = [];
+      segWidth = [];
+      lineMinX = 0;
+      lineMaxX = lineWidth;
+      let segCursor = 0;
+      for (let ii = 0; ii < line.items.length; ii++) {
+        const item = line.items[ii]!;
+        const segAdvance = item.width + item.spacingAfter;
+        if (segStartX[item.segmentIndex] === undefined)
+          segStartX[item.segmentIndex] = segCursor;
+        const prev = segWidth[item.segmentIndex] ?? 0;
+        segWidth[item.segmentIndex] = prev + segAdvance;
+        if (item.drawingPath?.bounds) {
+          const b = item.drawingPath.bounds;
+          const drawScaleX = item.scaleXFactor * safeScreenScaleXPar;
+          const minX = quantSubpixel(segCursor + b.xMin * drawScaleX);
+          const maxX = quantSubpixel(segCursor + b.xMax * drawScaleX);
+          if (minX < lineMinX) lineMinX = minX;
+          if (maxX > lineMaxX) lineMaxX = maxX;
+        } else if (item.shaped) {
+          const positions = item.shaped.positions;
+          const infos = item.shaped.infos;
+          let pen = segCursor;
+          const scaleX = item.scaleX;
+          const scaleY = item.scaleY;
+          const italicSlant = item.syntheticItalic ? SYNTHETIC_ITALIC_SHEAR : 0;
+          const boldStrength = item.syntheticBold
+            ? (item.fontSize / 64) * LIBASS_BOLD_STRENGTH_SCALE
+            : 0;
+          for (let gi = 0; gi < positions.length; gi++) {
+            const pos = positions[gi]!;
+            const glyphId = infos[gi]!.glyphId;
+            const xOffset = quantSubpixel(pos.xOffset * scaleX);
+            const xAdvance = quantSubpixel(pos.xAdvance * scaleX);
+            const bounds = getGlyphBoundsCached(item.font, glyphId);
+            if (bounds) {
+              let xMin = bounds.xMin * scaleX;
+              let xMax = bounds.xMax * scaleX;
+              if (italicSlant !== 0) {
+                const yMin = bounds.yMin * scaleY;
+                const yMax = bounds.yMax * scaleY;
+                const x0 = xMin + yMin * italicSlant;
+                const x1 = xMin + yMax * italicSlant;
+                const x2 = xMax + yMin * italicSlant;
+                const x3 = xMax + yMax * italicSlant;
+                xMin = Math.min(x0, x1, x2, x3);
+                xMax = Math.max(x0, x1, x2, x3);
+              }
+              if (boldStrength > 0) {
+                xMin -= boldStrength;
+                xMax += boldStrength;
+              }
+              const minX = quantSubpixel(pen + xOffset + xMin);
+              const maxX = quantSubpixel(pen + xOffset + xMax);
+              if (minX < lineMinX) lineMinX = minX;
+              if (maxX > lineMaxX) lineMaxX = maxX;
+            } else {
+              const gx = quantSubpixel(pen + xOffset);
+              const endX = quantSubpixel(gx + xAdvance);
+              if (gx < lineMinX) lineMinX = gx;
+              if (endX > lineMaxX) lineMaxX = endX;
             }
-            if (boldStrength > 0) {
-              xMin -= boldStrength;
-              xMax += boldStrength;
-            }
-            const minX = quantSubpixel(pen + xOffset + xMin);
-            const maxX = quantSubpixel(pen + xOffset + xMax);
-            if (minX < lineMinX) lineMinX = minX;
-            if (maxX > lineMaxX) lineMaxX = maxX;
-          } else {
-            const gx = quantSubpixel(pen + xOffset);
-            const endX = quantSubpixel(gx + xAdvance);
-            if (gx < lineMinX) lineMinX = gx;
-            if (endX > lineMaxX) lineMaxX = endX;
+            const isLast = gi === positions.length - 1;
+            const advance =
+              xAdvance + (isLast ? item.spacingAfter : item.spacing);
+            pen = quantSubpixel(pen + advance);
           }
-          const isLast = gi === positions.length - 1;
-          const advance =
-            xAdvance + (isLast ? item.spacingAfter : item.spacing);
-          pen = quantSubpixel(pen + advance);
         }
+        segCursor = quantSubpixel(segCursor + segAdvance);
       }
-      segCursor = quantSubpixel(segCursor + segAdvance);
+      if (line.cacheable) {
+        line.segStartX = segStartX;
+        line.segWidth = segWidth;
+        line.minX = lineMinX;
+        line.maxX = lineMaxX;
+      }
     }
 
     let xStart = marginL;
@@ -648,6 +869,7 @@ export function renderEventLines(input: RenderLinesInput): void {
     }
 
     let boxItem: LineItem | null = null;
+    let boxItemIndex = -1;
     let boxPadX = 0;
     let boxPadY = 0;
     let boxShadow = 0;
@@ -660,7 +882,10 @@ export function renderEventLines(input: RenderLinesInput): void {
     for (let ii = 0; ii < line.items.length; ii++) {
       const item = line.items[ii]!;
       if (item.borderStyle !== 3) continue;
-      if (!boxItem) boxItem = item;
+      if (!boxItem) {
+        boxItem = item;
+        boxItemIndex = ii;
+      }
       boxPadX = Math.max(boxPadX, item.borderX);
       boxPadY = Math.max(boxPadY, item.borderY);
       boxShadow = Math.max(boxShadow, item.shadow);
@@ -697,11 +922,32 @@ export function renderEventLines(input: RenderLinesInput): void {
 
       const baseX = xStart - padX;
       const baseY = baselineY - line.ascent - padY;
-      const boxColor = applyFade(boxItem.outlineColor, boxItem.fadeFactor);
-      const boxShadowColor = applyFade(
-        boxItem.shadowColor,
-        boxItem.fadeFactor,
-      );
+      let boxOutline = boxItem.outlineColor;
+      let boxShadowBase = boxItem.shadowColor;
+      if (boxItem.animates.length > 0) {
+        const colorState = {
+          primary: [0, 0, 0, 0] as ColorRGBA,
+          secondary: [0, 0, 0, 0] as ColorRGBA,
+          outline: [
+            boxOutline[0],
+            boxOutline[1],
+            boxOutline[2],
+            boxOutline[3],
+          ] as ColorRGBA,
+          shadow: [
+            boxShadowBase[0],
+            boxShadowBase[1],
+            boxShadowBase[2],
+            boxShadowBase[3],
+          ] as ColorRGBA,
+        };
+        applyAnimateColors(colorState, boxItem.animates, timeMs, ev);
+        boxOutline = colorState.outline;
+        boxShadowBase = colorState.shadow;
+      }
+      const boxFade = itemFadeFactor(boxItem, timeMs, ev);
+      const boxColor = applyFade(boxOutline, boxFade);
+      const boxShadowColor = applyFade(boxShadowBase, boxFade);
       const shadowXRaw = boxShadowXExplicit
         ? boxShadowX
         : boxShadow * boxItem.shadowScaleX;
@@ -743,11 +989,15 @@ export function renderEventLines(input: RenderLinesInput): void {
           z: ev.layer,
           clip: clip ?? undefined,
         } as BitmapLayer;
+        cacheItemIndex = boxItemIndex;
         pushLayer(
           shadowLayer,
           "shadow",
           boxItem,
           Math.max(padX, padY, extraPad),
+          undefined,
+          undefined,
+          "shadow",
         );
       }
 
@@ -763,11 +1013,21 @@ export function renderEventLines(input: RenderLinesInput): void {
         z: ev.layer,
         clip: clip ?? undefined,
       } as BitmapLayer;
-      pushLayer(boxLayer, "outline", boxItem, Math.max(padX, padY, extraPad));
+      cacheItemIndex = boxItemIndex;
+      pushLayer(
+        boxLayer,
+        "outline",
+        boxItem,
+        Math.max(padX, padY, extraPad),
+        undefined,
+        undefined,
+        "box",
+      );
     }
 
     for (let ii = 0; ii < line.items.length; ii++) {
       const item = line.items[ii]!;
+      cacheItemIndex = ii;
       const scaleX = item.scaleX;
       const scaleY = item.scaleY;
       const combineEnabled =
@@ -780,19 +1040,32 @@ export function renderEventLines(input: RenderLinesInput): void {
         item.shearY !== 0 && scaleX !== 0 && scaleY !== 0
           ? item.shearY * (scaleY / scaleX)
           : item.shearY;
-      const fade = item.fadeFactor;
+      const fade = itemFadeFactor(item, timeMs, ev);
       const originX = item.originOverride
         ? quantSubpixel(item.originOverride.x)
         : blockAnchorX;
       const originY = item.originOverride
         ? quantSubpixel(item.originOverride.y)
         : blockAnchorY;
-      const outlineBase = item.outlineColor;
-      const shadowBase = item.shadowColor;
-      const primaryBase = item.primaryColor;
-      const secondaryBase = item.secondaryColor;
-      const segStart = segStartX.get(item.segmentIndex) ?? 0;
-      const segW = segWidth.get(item.segmentIndex) ?? item.width;
+      let outlineBase = item.outlineColor;
+      let shadowBase = item.shadowColor;
+      let primaryBase = item.primaryColor;
+      let secondaryBase = item.secondaryColor;
+      if (item.animates.length > 0) {
+        const colorState = {
+          primary: [primaryBase[0], primaryBase[1], primaryBase[2], primaryBase[3]] as ColorRGBA,
+          secondary: [secondaryBase[0], secondaryBase[1], secondaryBase[2], secondaryBase[3]] as ColorRGBA,
+          outline: [outlineBase[0], outlineBase[1], outlineBase[2], outlineBase[3]] as ColorRGBA,
+          shadow: [shadowBase[0], shadowBase[1], shadowBase[2], shadowBase[3]] as ColorRGBA,
+        };
+        applyAnimateColors(colorState, item.animates, timeMs, ev);
+        primaryBase = colorState.primary;
+        secondaryBase = colorState.secondary;
+        outlineBase = colorState.outline;
+        shadowBase = colorState.shadow;
+      }
+      const segStart = segStartX[item.segmentIndex] ?? 0;
+      const segW = segWidth[item.segmentIndex] ?? item.width;
       // libass embolden strength ~= fontSize / 64 (see ass_font.c ass_glyph_embolden)
       const boldStrength = item.syntheticBold
         ? (item.fontSize / 64) * LIBASS_BOLD_STRENGTH_SCALE
@@ -843,6 +1116,27 @@ export function renderEventLines(input: RenderLinesInput): void {
       const fillSecondaryFinal = applyFade(karaokeFillSecondary, fade);
       const outlineColor = applyFade(outlineBase, fade);
       const shadowColor = applyFade(shadowBase, fade);
+      const fillOpaque =
+        fillPrimaryFinal[3] === 255 && fillSecondaryFinal[3] === 255;
+      const borderMax = Math.max(item.borderX, item.borderY);
+
+      const allTransparent =
+        fillSolidFinal[3] === 0 &&
+        fillPrimaryFinal[3] === 0 &&
+        fillSecondaryFinal[3] === 0 &&
+        outlineColor[3] === 0 &&
+        shadowColor[3] === 0;
+      if (allTransparent) {
+        penX = quantSubpixel(penX + item.width + item.spacingAfter);
+        continue;
+      }
+      if (item.isWhitespace && item.borderStyle !== 3) {
+        const shadowAny = item.shadow !== 0 || item.shadowX !== 0 || item.shadowY !== 0;
+        if (borderMax <= 0 && !shadowAny) {
+          penX = quantSubpixel(penX + item.width + item.spacingAfter);
+          continue;
+        }
+      }
 
       const combineAllowed = combineEnabled;
 
@@ -1022,7 +1316,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "shadow", item, pad);
+            pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow");
           }
 
           if (og && karaokeOutlineEnabled) {
@@ -1037,7 +1331,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad);
+            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline");
           }
 
           const fgOriginX = px + fg.bearingX;
@@ -1057,7 +1351,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad);
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary");
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -1070,10 +1364,10 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad);
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary");
             } else {
               const leftLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1090,9 +1384,9 @@ export function renderEventLines(input: RenderLinesInput): void {
                 x1: karaokeSplitX,
                 y1: KARAOKE_CLIP_INF,
                 inverse: false,
-              });
+              }, undefined, "fillPrimary");
               const rightLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1109,7 +1403,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 x1: KARAOKE_CLIP_INF,
                 y1: KARAOKE_CLIP_INF,
                 inverse: false,
-              });
+              }, undefined, "fillSecondary");
             }
           } else {
             const layer = {
@@ -1123,7 +1417,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad);
+            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid");
           }
         }
 
@@ -1146,6 +1440,158 @@ export function renderEventLines(input: RenderLinesInput): void {
         item.rotateX !== 0 ||
         item.rotateY !== 0;
       if (!itemHasTransform && combineAllowed) {
+        const penSub = splitSubpixel(penX).s;
+        const baseSub = splitSubpixel(baselineY).s;
+        const fillOpaque =
+          fillPrimaryFinal[3] === 255 && fillSecondaryFinal[3] === 255;
+        const combinedKey = combinedCacheKey(
+          item,
+          scaleX,
+          scaleY,
+          boldStrength,
+          penSub,
+          baseSub,
+          fillOpaque,
+        );
+        const cachedCombined = getCombinedCache(item.font, combinedKey);
+        if (cachedCombined) {
+          const baseOriginX = penX + cachedCombined.offsetX;
+          const baseOriginY = baselineY + cachedCombined.offsetY;
+          const pad = cachedCombined.pad;
+          const fg = cachedCombined.fg;
+          const og = cachedCombined.og;
+
+          if (item.borderStyle !== 3) {
+            const sxRaw = item.shadowXExplicit
+              ? item.shadowX
+              : item.shadow * item.shadowScaleX;
+            const syRaw = item.shadowYExplicit
+              ? item.shadowY
+              : item.shadow * item.shadowScaleY;
+            const sx = quantizeShadowOffset(sxRaw, item.shadowMaskX);
+            const sy = quantizeShadowOffset(syRaw, item.shadowMaskY);
+            if (sx !== 0 || sy !== 0) {
+              const sg = og ?? fg;
+              const shadowGlyph = cloneRasterGlyph(sg);
+              const layer = {
+                bitmap: shadowGlyph.bitmap.buffer,
+                width: shadowGlyph.bitmap.width,
+                height: shadowGlyph.bitmap.rows,
+                stride: shadowGlyph.bitmap.pitch,
+                originX: baseOriginX + shadowGlyph.bearingX + sx,
+                originY: baseOriginY - shadowGlyph.bearingY + sy,
+                color: shadowColor,
+                z: ev.layer,
+                clip: clip ?? undefined,
+              } as BitmapLayer;
+              pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow");
+            }
+          }
+
+          if (og && karaokeOutlineEnabled) {
+            const layer = {
+              bitmap: og.bitmap.buffer,
+              width: og.bitmap.width,
+              height: og.bitmap.rows,
+              stride: og.bitmap.pitch,
+              originX: baseOriginX + og.bearingX,
+              originY: baseOriginY - og.bearingY,
+              color: outlineColor,
+              z: ev.layer,
+              clip: clip ?? undefined,
+            } as BitmapLayer;
+            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline");
+          }
+
+          const fgOriginX = baseOriginX + fg.bearingX;
+          const fgOriginY = baseOriginY - fg.bearingY;
+          if (karaokeSplitX !== null) {
+            const left = Math.round(fgOriginX);
+            const right = left + fg.bitmap.width;
+            if (karaokeSplitX <= left) {
+              const layer = {
+                bitmap: fg.bitmap.buffer,
+                width: fg.bitmap.width,
+                height: fg.bitmap.rows,
+                stride: fg.bitmap.pitch,
+                originX: fgOriginX,
+                originY: fgOriginY,
+                color: fillSecondaryFinal,
+                z: ev.layer,
+                clip: clip ?? undefined,
+              } as BitmapLayer;
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary");
+            } else if (karaokeSplitX >= right) {
+              const layer = {
+                bitmap: fg.bitmap.buffer,
+                width: fg.bitmap.width,
+                height: fg.bitmap.rows,
+                stride: fg.bitmap.pitch,
+                originX: fgOriginX,
+                originY: fgOriginY,
+                color: fillPrimaryFinal,
+                z: ev.layer,
+                clip: clip ?? undefined,
+              } as BitmapLayer;
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary");
+            } else {
+              const leftLayer = {
+                bitmap: fg.bitmap.buffer,
+                width: fg.bitmap.width,
+                height: fg.bitmap.rows,
+                stride: fg.bitmap.pitch,
+                originX: fgOriginX,
+                originY: fgOriginY,
+                color: fillPrimaryFinal,
+                z: ev.layer,
+                clip: clip ?? undefined,
+              } as BitmapLayer;
+              pushLayer(leftLayer, "fill", item, pad, {
+                type: "rect",
+                x0: -KARAOKE_CLIP_INF,
+                y0: -KARAOKE_CLIP_INF,
+                x1: karaokeSplitX,
+                y1: KARAOKE_CLIP_INF,
+                inverse: false,
+              }, undefined, "fillPrimary");
+              const rightLayer = {
+                bitmap: fg.bitmap.buffer,
+                width: fg.bitmap.width,
+                height: fg.bitmap.rows,
+                stride: fg.bitmap.pitch,
+                originX: fgOriginX,
+                originY: fgOriginY,
+                color: fillSecondaryFinal,
+                z: ev.layer,
+                clip: clip ?? undefined,
+              } as BitmapLayer;
+              pushLayer(rightLayer, "fill", item, pad, {
+                type: "rect",
+                x0: karaokeSplitX,
+                y0: -KARAOKE_CLIP_INF,
+                x1: KARAOKE_CLIP_INF,
+                y1: KARAOKE_CLIP_INF,
+                inverse: false,
+              }, undefined, "fillSecondary");
+            }
+          } else {
+            const layer = {
+              bitmap: fg.bitmap.buffer,
+              width: fg.bitmap.width,
+              height: fg.bitmap.rows,
+              stride: fg.bitmap.pitch,
+              originX: fgOriginX,
+              originY: fgOriginY,
+              color: fillSolidFinal,
+              z: ev.layer,
+              clip: clip ?? undefined,
+            } as BitmapLayer;
+            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid");
+          }
+
+          penX = quantSubpixel(penX + item.width + item.spacingAfter);
+          continue;
+        }
         const fillGlyphs: Array<{
           bitmap: {
             buffer: Uint8Array;
@@ -1199,20 +1645,53 @@ export function renderEventLines(input: RenderLinesInput): void {
 
           const useBox = item.borderStyle === 3;
           const borderMax = Math.max(item.borderX, item.borderY);
-          const glyphPath = buildGlyphPath(
-            item.font,
+          const fillKey = fillCacheKey(
             glyphId,
             scaleX,
             scaleY,
             item.syntheticItalic,
             boldStrength,
           );
-          if (!glyphPath) {
-            glyphPenX = quantSubpixel(glyphPenX + advance);
-            continue;
+          const outlineKey =
+            !useBox && borderMax > 0
+              ? outlineCacheKey(
+                  glyphId,
+                  scaleX,
+                  scaleY,
+                  item.syntheticItalic,
+                  boldStrength,
+                  item.borderX,
+                  item.borderY,
+                )
+              : null;
+          let fillRaster = getRasterCache(glyphFillCache, item.font, fillKey);
+          let outlineRaster =
+            outlineKey && !useBox && borderMax > 0
+              ? getRasterCache(glyphOutlineCache, item.font, outlineKey)
+              : null;
+
+          let glyphPath: PathBuilder | null = null;
+          if (!fillRaster || (!outlineRaster && outlineKey)) {
+            glyphPath = buildGlyphPath(
+              item.font,
+              glyphId,
+              scaleX,
+              scaleY,
+              item.syntheticItalic,
+              boldStrength,
+            );
+            if (!glyphPath) {
+              glyphPenX = quantSubpixel(glyphPenX + advance);
+              continue;
+            }
           }
 
-          const fillRaster = rasterizeFillFromPath(glyphPath, true);
+          if (!fillRaster) {
+            fillRaster = glyphPath ? rasterizeFillFromPath(glyphPath, true) : null;
+            if (fillRaster) {
+              setRasterCache(glyphFillCache, item.font, fillKey, fillRaster);
+            }
+          }
           if (fillRaster) {
             const originX = gx + fillRaster.bearingX;
             const originY = gy - fillRaster.bearingY;
@@ -1261,12 +1740,24 @@ export function renderEventLines(input: RenderLinesInput): void {
           }
 
           if (!useBox && borderMax > 0) {
-            const outlineRaster = rasterizeOutlineFromPath(
-              glyphPath,
-              item.borderX,
-              item.borderY,
-              true,
-            );
+            if (!outlineRaster) {
+              outlineRaster = glyphPath
+                ? rasterizeOutlineFromPath(
+                    glyphPath,
+                    item.borderX,
+                    item.borderY,
+                    true,
+                  )
+                : null;
+              if (outlineRaster && outlineKey) {
+                setRasterCache(
+                  glyphOutlineCache,
+                  item.font,
+                  outlineKey,
+                  outlineRaster,
+                );
+              }
+            }
             if (outlineRaster) {
               const originX = gx + outlineRaster.bearingX;
               const originY = gy - outlineRaster.bearingY;
@@ -1447,7 +1938,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "shadow", item, pad);
+              pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow");
             }
           }
 
@@ -1463,7 +1954,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad);
+            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline");
           }
 
           const fgOriginX = baseOriginX + fg.bearingX;
@@ -1483,7 +1974,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad);
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary");
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -1496,10 +1987,10 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad);
+              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary");
             } else {
               const leftLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1516,9 +2007,9 @@ export function renderEventLines(input: RenderLinesInput): void {
                 x1: karaokeSplitX,
                 y1: KARAOKE_CLIP_INF,
                 inverse: false,
-              });
+              }, undefined, "fillPrimary");
               const rightLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1535,7 +2026,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 x1: KARAOKE_CLIP_INF,
                 y1: KARAOKE_CLIP_INF,
                 inverse: false,
-              });
+              }, undefined, "fillSecondary");
             }
           } else {
             const layer = {
@@ -1549,8 +2040,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad);
+            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid");
           }
+
+          setCombinedCache(item.font, combinedKey, {
+            fg,
+            og,
+            offsetX: baseOriginX - penX,
+            offsetY: baseOriginY - baselineY,
+            pad,
+          });
         }
 
         penX = quantSubpixel(penX + item.width + item.spacingAfter);
@@ -1738,7 +2237,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "shadow", item, pad, undefined, glyphMeta);
+              pushLayer(layer, "shadow", item, pad, undefined, glyphMeta, "shadow");
             }
           }
 
@@ -1754,7 +2253,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad, undefined, glyphMeta);
+            pushLayer(layer, "outline", item, pad, undefined, glyphMeta, "outline");
           }
 
           const fgOriginX = px + fg.bearingX;
@@ -1774,7 +2273,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
+              pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillSecondary");
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -1787,10 +2286,10 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
+              pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillPrimary");
             } else {
               const leftLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1814,9 +2313,10 @@ export function renderEventLines(input: RenderLinesInput): void {
                   inverse: false,
                 },
                 glyphMeta,
+                "fillPrimary",
               );
               const rightLayer = {
-                bitmap: fg.bitmap.buffer.slice(),
+                bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
                 height: fg.bitmap.rows,
                 stride: fg.bitmap.pitch,
@@ -1840,6 +2340,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                   inverse: false,
                 },
                 glyphMeta,
+                "fillSecondary",
               );
             }
           } else {
@@ -1854,7 +2355,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad, undefined, glyphMeta);
+            pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillSolid");
           }
         }
 
@@ -1870,6 +2371,8 @@ export function renderEventLines(input: RenderLinesInput): void {
       let strikeoutPos: number | null = null;
       let underlineColor: ColorRGBA | null = null;
       let strikeoutColor: ColorRGBA | null = null;
+      let underlineItemIndex = -1;
+      let strikeoutItemIndex = -1;
 
       for (let ii = 0; ii < line.items.length; ii++) {
         const item = line.items[ii]!;
@@ -1882,6 +2385,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           underlinePos =
             underlinePos === null ? pos : Math.min(underlinePos, pos);
           underlineColor = item.primaryColor;
+          underlineItemIndex = ii;
         }
         if (item.strikeout) {
           maxStrikeoutThickness = Math.max(
@@ -1892,6 +2396,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           strikeoutPos =
             strikeoutPos === null ? pos : Math.min(strikeoutPos, pos);
           strikeoutColor = item.primaryColor;
+          strikeoutItemIndex = ii;
         }
       }
 
@@ -1899,8 +2404,12 @@ export function renderEventLines(input: RenderLinesInput): void {
         yPos: number,
         thickness: number,
         color: ColorRGBA | null,
+        itemIndex: number,
       ) => {
         if (!color || thickness <= 0) return;
+        if (itemIndex < 0) return;
+        const anchorItem = line.items[itemIndex];
+        if (!anchorItem) return;
         const height = Math.max(1, Math.round(Math.abs(thickness)));
         const width = Math.max(1, Math.ceil(lineWidth));
         const buffer = new Uint8Array(width * height);
@@ -1926,16 +2435,17 @@ export function renderEventLines(input: RenderLinesInput): void {
           z: ev.layer,
           clip: clip ?? undefined,
         } as BitmapLayer;
-        pushLayer(layer, "fill", line.items[0]!, 0);
+        cacheItemIndex = itemIndex;
+        pushLayer(layer, "fill", anchorItem, 0, undefined, undefined, "fillSolid");
       };
 
       if (maxUnderlineThickness > 0 && underlinePos !== null) {
         const yPos = baselineY - underlinePos;
-        drawLine(yPos, maxUnderlineThickness, underlineColor);
+        drawLine(yPos, maxUnderlineThickness, underlineColor, underlineItemIndex);
       }
       if (maxStrikeoutThickness > 0 && strikeoutPos !== null) {
         const yPos = baselineY - strikeoutPos;
-        drawLine(yPos, maxStrikeoutThickness, strikeoutColor);
+        drawLine(yPos, maxStrikeoutThickness, strikeoutColor, strikeoutItemIndex);
       }
     }
 

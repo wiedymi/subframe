@@ -15,6 +15,10 @@ type BlurMethod = {
   coeff: Int16Array;
 };
 
+const blurMethodCache = new Map<number, BlurMethod>();
+let blurScratchA = new Int16Array(0);
+let blurScratchB = new Int16Array(0);
+
 const DITHER_LINE = new Int16Array([
   8, 40, 8, 40, 8, 40, 8, 40, 8, 40, 8, 40, 8, 40, 8, 40,
   56, 24, 56, 24, 56, 24, 56, 24, 56, 24, 56, 24, 56, 24, 56, 24,
@@ -121,6 +125,8 @@ function calcCoeff(mu: Float64Array, n: number, r2: number, mul: number): void {
 }
 
 function findBestMethod(r2: number): BlurMethod {
+  const cached = blurMethodCache.get(r2);
+  if (cached) return cached;
   const mu = new Float64Array(8);
   let level = 0;
   let radius = 4;
@@ -147,7 +153,9 @@ function findBestMethod(r2: number): BlurMethod {
     coeff[i] = (0x10000 * mu[i]! + 0.5) | 0;
   }
 
-  return { level, radius, coeff };
+  const method = { level, radius, coeff };
+  blurMethodCache.set(r2, method);
+  return method;
 }
 
 function shrinkFunc(p1p: number, p1n: number, z0p: number, z0n: number, n1p: number, n1n: number): number {
@@ -328,8 +336,12 @@ export function libassGaussianBlur(
   const endH = ((h + offsetY) & ~((1 << blurY.level) - 1)) - 4;
 
   const maxSize = Math.max(w * h, endW * endH);
-  let src = new Int16Array(maxSize);
-  let dst = new Int16Array(maxSize);
+  if (blurScratchA.length < maxSize) {
+    blurScratchA = new Int16Array(maxSize);
+    blurScratchB = new Int16Array(maxSize);
+  }
+  let src = blurScratchA;
+  let dst = blurScratchB;
 
   unpackToInt16(bitmap.buffer, w, h, bitmap.pitch, src);
 

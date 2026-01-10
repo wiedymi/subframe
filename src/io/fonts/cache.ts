@@ -4,6 +4,7 @@ const cache = new Map<string, Promise<Font>>();
 const sourceMap = new Map<string, FontSource>();
 let fontResolver: FontResolver | null = null;
 const styleCachePrefix = "__style__:";
+const styleBasePrefix = "__style_base__:";
 
 export type FontSource = string | ArrayBuffer | Uint8Array | Font;
 export type FontResolver = (
@@ -42,10 +43,24 @@ export function getFontForStyle(
   italic: boolean,
   sampleCodepoint?: number,
 ): Promise<Font> {
-  const key = `${styleCachePrefix}${fontName}|${bold ? 1 : 0}|${italic ? 1 : 0}|${sampleCodepoint ?? 0}`;
+  const baseKey = `${styleBasePrefix}${fontName}|${bold ? 1 : 0}|${italic ? 1 : 0}`;
+  let baseCached = cache.get(baseKey);
+  if (!baseCached) {
+    baseCached = loadFontForStyle(fontName, bold, italic, undefined);
+    cache.set(baseKey, baseCached);
+  }
+  if (!sampleCodepoint || !Number.isFinite(sampleCodepoint) || sampleCodepoint <= 0) {
+    return baseCached;
+  }
+
+  const key = `${styleCachePrefix}${fontName}|${bold ? 1 : 0}|${italic ? 1 : 0}|${sampleCodepoint}`;
   let cached = cache.get(key);
   if (!cached) {
-    cached = loadFontForStyle(fontName, bold, italic, sampleCodepoint);
+    cached = (async () => {
+      const baseFont = await baseCached!;
+      if (baseFont.glyphId(sampleCodepoint) !== 0) return baseFont;
+      return await loadFontForStyle(fontName, bold, italic, sampleCodepoint);
+    })();
     cache.set(key, cached);
   }
   return cached;

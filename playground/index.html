@@ -18,7 +18,9 @@
       <div class="player-container">
         <div class="video-wrapper">
           <video id="video" crossorigin="anonymous"></video>
-          <canvas id="subtitle-canvas"></canvas>
+          <canvas id="subtitle-canvas-2d"></canvas>
+          <canvas id="subtitle-canvas-webgl"></canvas>
+          <canvas id="subtitle-canvas-webgpu"></canvas>
         </div>
 
         <div class="controls">
@@ -28,6 +30,14 @@
           <label class="toggle">
             <input type="checkbox" id="render-mode">
             <span>Render at PlayRes</span>
+          </label>
+          <label class="select">
+            <span>Backend</span>
+            <select id="backend-select">
+              <option value="cpu">CPU</option>
+              <option value="webgl">WebGL</option>
+              <option value="webgpu">WebGPU</option>
+            </select>
           </label>
         </div>
       </div>
@@ -120,6 +130,14 @@
             <div class="status-row">
               <span class="label">Memory:</span>
               <span id="perf-memory" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">GPU:</span>
+              <span id="perf-gpu" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Cache:</span>
+              <span id="perf-cache" class="value">-</span>
             </div>
           </div>
           <div class="perf-graphs">

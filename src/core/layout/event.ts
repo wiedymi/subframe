@@ -1,5 +1,5 @@
 import type { SubtitleDocument, SubtitleEvent, Effect } from "subforge/core";
-import type { GlyphBuffer } from "text-shaper";
+import { GlyphBuffer } from "text-shaper";
 import type { FrameContext } from "../data/types";
 import { getFontForStyle } from "../../io/fonts/cache";
 import { quantSubpixel } from "../math/fixed";
@@ -53,18 +53,14 @@ import type {
   OriginParams,
   ResetParams,
 } from "../tags/types";
-import {
-  fadeFactorComplex,
-  fadeFactorSimple,
-  findFadeComplexEffect,
-  findFadeEffect,
-} from "../animate/fade";
-import { applyAnimateColors, applyAnimateNumeric, findAnimateEffects } from "../animate/apply";
+import { findFadeComplexEffect, findFadeEffect } from "../animate/fade";
+import { applyAnimateNumeric, findAnimateEffects } from "../animate/apply";
 import { computeMovePosition } from "../animate/move";
 import { parseDrawingPath } from "../clip/parser";
 import { findClipEffect } from "../clip/apply";
 import { quantizeBlur } from "../filters/blur";
 import { computeRunMetrics } from "../raster/metrics";
+import { addFontMs, addShapeMs, isProfiling, profileNow } from "../profile";
 import {
   detectDirection,
   kerning,
@@ -73,6 +69,153 @@ import {
   getVisualOrder,
   Direction,
 } from "text-shaper";
+
+const EVENT_LAYOUT_CACHE = new WeakMap<
+  SubtitleEvent,
+  { key: string; text: string; value: EventLayoutResult }
+>();
+
+function layoutCacheKey(input: {
+  frame: FrameContext;
+  playResX: number;
+  playResY: number;
+  parScaleX: number;
+  baseContentWidth: number;
+  baseContentHeight: number;
+  fitWidth: number;
+  fitHeight: number;
+  scaleBorderAndShadow: boolean | undefined;
+  info: SubtitleDocument["info"];
+}): string {
+  const info = input.info as {
+    layoutResX?: number;
+    layoutResY?: number;
+    storageWidth?: number;
+    storageHeight?: number;
+  };
+  const q = (v: number) => Math.round(v * 1e4);
+  return [
+    input.frame.width,
+    input.frame.height,
+    input.frame.wrapStyle,
+    input.playResX,
+    input.playResY,
+    q(input.parScaleX),
+    q(input.baseContentWidth),
+    q(input.baseContentHeight),
+    q(input.fitWidth),
+    q(input.fitHeight),
+    input.scaleBorderAndShadow ? 1 : 0,
+    q(Number.isFinite(info.layoutResX) ? (info.layoutResX as number) : 0),
+    q(Number.isFinite(info.layoutResY) ? (info.layoutResY as number) : 0),
+    q(Number.isFinite(info.storageWidth) ? (info.storageWidth as number) : 0),
+    q(Number.isFinite(info.storageHeight) ? (info.storageHeight as number) : 0),
+  ].join("|");
+}
+
+function animateAffectsLayout(target: {
+  fontSize?: number;
+  scaleX?: number;
+  scaleY?: number;
+  rotateZ?: number;
+  rotateX?: number;
+  rotateY?: number;
+  shearX?: number;
+  shearY?: number;
+  spacing?: number;
+  border?: number;
+  shadow?: number;
+  shadowX?: number;
+  shadowY?: number;
+  blur?: number;
+  edgeBlur?: number;
+}): boolean {
+  return (
+    target.fontSize !== undefined ||
+    target.scaleX !== undefined ||
+    target.scaleY !== undefined ||
+    target.rotateZ !== undefined ||
+    target.rotateX !== undefined ||
+    target.rotateY !== undefined ||
+    target.shearX !== undefined ||
+    target.shearY !== undefined ||
+    target.spacing !== undefined ||
+    target.border !== undefined ||
+    target.shadow !== undefined ||
+    target.shadowX !== undefined ||
+    target.shadowY !== undefined ||
+    target.blur !== undefined ||
+    target.edgeBlur !== undefined
+  );
+}
+
+function hasTimeVariantEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+  for (let s = 0; s < segments.length; s++) {
+    const effects = segments[s]!.effects;
+    if (!effects || effects.length === 0) continue;
+    for (let i = 0; i < effects.length; i++) {
+      const type = effects[i]!.type;
+      if (type === "move") return true;
+      if (type === "animate") {
+        const anim = effects[i]!.params as AnimateParams;
+        if (anim?.target && animateAffectsLayout(anim.target)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function animateAffectsColor(target: {
+  primaryColor?: number;
+  secondaryColor?: number;
+  outlineColor?: number;
+  backColor?: number;
+  alpha?: number;
+  primaryAlpha?: number;
+  secondaryAlpha?: number;
+  outlineAlpha?: number;
+  backAlpha?: number;
+}): boolean {
+  return (
+    target.primaryColor !== undefined ||
+    target.secondaryColor !== undefined ||
+    target.outlineColor !== undefined ||
+    target.backColor !== undefined ||
+    target.alpha !== undefined ||
+    target.primaryAlpha !== undefined ||
+    target.secondaryAlpha !== undefined ||
+    target.outlineAlpha !== undefined ||
+    target.backAlpha !== undefined
+  );
+}
+
+function hasKaraokeEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+  for (let s = 0; s < segments.length; s++) {
+    const effects = segments[s]!.effects;
+    if (!effects || effects.length === 0) continue;
+    for (let i = 0; i < effects.length; i++) {
+      const type = effects[i]!.type;
+      if (type === "karaoke" || type === "karaokeAbsolute") return true;
+    }
+  }
+  return false;
+}
+
+function hasColorVariantEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+  for (let s = 0; s < segments.length; s++) {
+    const effects = segments[s]!.effects;
+    if (!effects || effects.length === 0) continue;
+    for (let i = 0; i < effects.length; i++) {
+      const type = effects[i]!.type;
+      if (type === "fade" || type === "fadeComplex") return true;
+      if (type === "animate") {
+        const anim = effects[i]!.params as AnimateParams;
+        if (anim?.target && animateAffectsColor(anim.target)) return true;
+      }
+    }
+  }
+  return false;
+}
 
 function reorderTokensForBidi(
   text: string,
@@ -155,6 +298,8 @@ export type EventLayoutResult = {
   safeScreenScaleY: number;
   safeBlurScaleX: number;
   safeBlurScaleY: number;
+  cacheKey?: string;
+  layerCacheMode: "none" | "static" | "tint";
 };
 
 export async function buildEventLayout(input: EventLayoutInput): Promise<EventLayoutResult | null> {
@@ -185,7 +330,49 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
   if (!eventBaseStyle) return null;
   let baseStyle = eventBaseStyle;
 
+  let cacheKey: string | null = null;
+  if (!ev.dirty) {
+    cacheKey = layoutCacheKey({
+      frame,
+      playResX,
+      playResY,
+      parScaleX,
+      baseContentWidth,
+      baseContentHeight,
+      fitWidth,
+      fitHeight,
+      scaleBorderAndShadow,
+      info: doc.info,
+    });
+    const cached = EVENT_LAYOUT_CACHE.get(ev);
+    if (cached && cached.key === cacheKey && cached.text === ev.text) {
+      return cached.value;
+    }
+  }
+
   const segments = resolveSegments(ev, frame.wrapStyle);
+  const layoutCacheable = !ev.dirty && !hasTimeVariantEffects(segments);
+  const hasKaraoke = hasKaraokeEffects(segments);
+  const hasColorVariants = hasColorVariantEffects(segments);
+  let layerCacheMode: "none" | "static" | "tint" = "none";
+  if (layoutCacheable) {
+    if (!hasKaraoke && hasColorVariants) layerCacheMode = "tint";
+    else if (!hasKaraoke && !hasColorVariants) layerCacheMode = "static";
+  }
+  if (layoutCacheable && !cacheKey) {
+    cacheKey = layoutCacheKey({
+      frame,
+      playResX,
+      playResY,
+      parScaleX,
+      baseContentWidth,
+      baseContentHeight,
+      fitWidth,
+      fitHeight,
+      scaleBorderAndShadow,
+      info: doc.info,
+    });
+  }
   const hasHardOverrides = segments.some((seg) => {
     if (seg.style?.pos) return true;
     if (!seg.effects || seg.effects.length === 0) return false;
@@ -269,6 +456,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     ascent: 0,
     descent: 0,
     height: 0,
+    cacheable: layoutCacheable,
   };
 
   let align = baseStyle.alignment;
@@ -480,12 +668,14 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     const fontName = inlineStyle?.fontName ?? baseStyle.fontName;
     let fontSize = inlineStyle?.fontSize ?? baseStyle.fontSize;
     const sampleCodepoint = findSampleCodepoint(seg.text);
+    const fontStart = isProfiling() ? profileNow() : 0;
     const font = await getFontForStyle(
       fontName,
       boldRequested,
       italicRequested,
       sampleCodepoint ?? undefined,
     );
+    if (isProfiling()) addFontMs(profileNow() - fontStart);
     const baseFontStyle = resolveFontStyle(
       font,
       boldRequested,
@@ -573,25 +763,16 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     const fontScale = getFontScaleForSize(font, fontSizePx);
     const scaleX = fontScale * scaleXFactor;
     const scaleY = fontScale * scaleYFactor;
-    let fadeFactor = 1;
-    if (currentFadeComplex) {
-      fadeFactor = fadeFactorComplex(timeMs, ev, currentFadeComplex);
-    } else if (currentFadeSimple) {
-      fadeFactor = fadeFactorSimple(
-        timeMs,
-        ev,
-        currentFadeSimple.in,
-        currentFadeSimple.out,
-      );
-    }
+    const fadeSimple = currentFadeSimple;
+    const fadeComplex = currentFadeComplex;
+    const fadeFactor = 1;
     const colorState = {
       primary: resolvePrimaryColor(baseStyle, inlineStyle),
       secondary: resolveSecondaryColor(baseStyle, inlineStyle),
       outline: resolveOutlineColor(baseStyle, inlineStyle),
       shadow: resolveShadowColor(baseStyle, inlineStyle),
     };
-    if (animateEffects.length > 0)
-      applyAnimateColors(colorState, animateEffects, timeMs, ev);
+    // Color animation is applied during raster to allow layout caching.
 
     const blurQuantX = quantizeBlur(blur, safeBlurScaleX);
     const blurQuantY = quantizeBlur(blur, safeBlurScaleY);
@@ -688,6 +869,8 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           karaokeEnd,
           karaokeMode,
           fadeFactor,
+          fadeSimple,
+          fadeComplex,
         };
 
         currentLine.width = quantSubpixel(currentLine.width + drawWidth);
@@ -721,6 +904,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
         const spacingScaled = quantSubpixel(
           spacing * scaleXFactor * safeScreenScaleXPar,
         );
+        const shapeStart = isProfiling() ? profileNow() : 0;
         const runs = await splitTokenByFont(
           token,
           font,
@@ -728,7 +912,10 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           boldRequested,
           italicRequested,
         );
-        if (runs.length === 0) continue;
+        if (runs.length === 0) {
+          if (isProfiling()) addShapeMs(profileNow() - shapeStart);
+          continue;
+        }
 
         const runRecords: Array<{
           font: Awaited<ReturnType<typeof getFont>>;
@@ -754,8 +941,10 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           const runScaleX = runFontScale * scaleXFactor;
           const runScaleY = runFontScale * scaleYFactor;
 
-          const shaped = acquireGlyphBuffer(run.text.length);
-          usedGlyphBuffers[usedGlyphBuffers.length] = shaped;
+          const shaped = layoutCacheable
+            ? GlyphBuffer.withCapacity(run.text.length)
+            : acquireGlyphBuffer(run.text.length);
+          if (!layoutCacheable) usedGlyphBuffers[usedGlyphBuffers.length] = shaped;
           const baseDirection = lineBaseDirection;
           shapeTextWithRuns(
             runFont,
@@ -810,6 +999,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
               ascent: 0,
               descent: 0,
               height: 0,
+            cacheable: layoutCacheable,
             };
           }
         }
@@ -879,6 +1069,8 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
             karaokeEnd,
             karaokeMode,
             fadeFactor,
+            fadeSimple,
+            fadeComplex,
           };
 
           currentLine.width = quantSubpixel(
@@ -889,6 +1081,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           if (record.descent > currentLine.descent)
             currentLine.descent = record.descent;
         }
+        if (isProfiling()) addShapeMs(profileNow() - shapeStart);
       }
 
       if (p < parts.length - 1) {
@@ -900,6 +1093,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           ascent: 0,
           descent: 0,
           height: 0,
+          cacheable: layoutCacheable,
         };
       }
     }
@@ -966,7 +1160,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
   blockAnchorY = quantSubpixel(blockAnchorY);
 
 
-  return {
+  const result = {
     lines,
     align,
     wrapStyle,
@@ -985,5 +1179,13 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     safeScreenScaleY,
     safeBlurScaleX,
     safeBlurScaleY,
+    cacheKey: cacheKey ?? undefined,
+    layerCacheMode,
   };
+
+  if (layoutCacheable && cacheKey) {
+    EVENT_LAYOUT_CACHE.set(ev, { key: cacheKey, text: ev.text, value: result });
+  }
+
+  return result;
 }

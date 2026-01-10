@@ -2,9 +2,15 @@ import { parseASS } from "subforge/ass";
 import type { SubtitleDocument } from "subforge/core";
 import {
   renderFrame,
+  prewarmFrameFromDocument,
   registerFontSource,
   resetFontCache,
   setFontResolver,
+  createWebGLBackend,
+  createWebGPUBackend,
+  getEventLayerCacheStats,
+  clearEventLayerCache,
+  type CompositorBackend,
 } from "../src";
 import type { BitmapLayer } from "../src/core/data/types";
 
@@ -22,6 +28,9 @@ interface AppState {
   timerStartTime: number;
   timerAnimationId: number | null;
   renderAtPlayRes: boolean;
+  backend: "cpu" | "webgl" | "webgpu";
+  prewarmed: boolean;
+  prewarmPromise: Promise<void> | null;
 }
 
 const state: AppState = {
@@ -38,17 +47,23 @@ const state: AppState = {
   timerStartTime: 0,
   timerAnimationId: null,
   renderAtPlayRes: false,
+  backend: "cpu",
+  prewarmed: false,
+  prewarmPromise: null,
 };
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 const video = $<HTMLVideoElement>("video");
-const canvas = $<HTMLCanvasElement>("subtitle-canvas");
-const ctx = canvas.getContext("2d")!;
+const canvas2d = $<HTMLCanvasElement>("subtitle-canvas-2d");
+const canvasWebgl = $<HTMLCanvasElement>("subtitle-canvas-webgl");
+const canvasWebgpu = $<HTMLCanvasElement>("subtitle-canvas-webgpu");
+const ctx2d = canvas2d.getContext("2d")!;
 const playPauseBtn = $<HTMLButtonElement>("play-pause");
 const timeline = $<HTMLInputElement>("timeline");
 const timeDisplay = $<HTMLSpanElement>("time-display");
 const renderModeToggle = $<HTMLInputElement>("render-mode");
+const backendSelect = $<HTMLSelectElement>("backend-select");
 const videoInput = $<HTMLInputElement>("video-input");
 const subtitleInput = $<HTMLInputElement>("subtitle-input");
 const fontInput = $<HTMLInputElement>("font-input");
@@ -66,6 +81,8 @@ const perfComposite = $<HTMLSpanElement>("perf-composite");
 const perfTotal = $<HTMLSpanElement>("perf-total");
 const perfLayers = $<HTMLSpanElement>("perf-layers");
 const perfMemory = $<HTMLSpanElement>("perf-memory");
+const perfGpu = $<HTMLSpanElement>("perf-gpu");
+const perfCache = $<HTMLSpanElement>("perf-cache");
 const perfGraph = $<HTMLCanvasElement>("perf-graph");
 const memoryGraph = $<HTMLCanvasElement>("memory-graph");
 const bgMode = $<HTMLSelectElement>("bg-mode");
@@ -79,6 +96,9 @@ const renderHistory = new Float32Array(HISTORY_SIZE);
 const memoryHistory = new Float32Array(HISTORY_SIZE);
 let historyIndex = 0;
 let historyCount = 0;
+let webglBackend: CompositorBackend | null = null;
+let webgpuBackend: CompositorBackend | null = null;
+let webgpuBackendPromise: Promise<CompositorBackend | null> | null = null;
 
 function log(msg: string, level: "info" | "warn" | "error" = "info") {
   const time = new Date().toISOString().slice(11, 23);
@@ -208,6 +228,51 @@ function applyBackground() {
   }
 }
 
+function updateBackendVisibility() {
+  canvas2d.style.display = state.backend === "cpu" ? "block" : "none";
+  canvasWebgl.style.display = state.backend === "webgl" ? "block" : "none";
+  canvasWebgpu.style.display = state.backend === "webgpu" ? "block" : "none";
+}
+
+function ensureWebGLBackend(): CompositorBackend | null {
+  if (webglBackend) return webglBackend;
+  try {
+    webglBackend = createWebGLBackend({ canvas: canvasWebgl, preferWebGL2: true });
+  } catch (err) {
+    log(`WebGL init failed: ${err}`, "error");
+    state.backend = "cpu";
+    backendSelect.value = "cpu";
+    updateBackendVisibility();
+    webglBackend = null;
+  }
+  return webglBackend;
+}
+
+async function ensureWebGPUBackend(): Promise<CompositorBackend | null> {
+  if (webgpuBackend) return webgpuBackend;
+  if (webgpuBackendPromise) return webgpuBackendPromise;
+
+  webgpuBackendPromise = (async () => {
+    try {
+      const backend = await createWebGPUBackend({ canvas: canvasWebgpu });
+      backend.resize(canvasWebgpu.width, canvasWebgpu.height);
+      webgpuBackend = backend;
+      return backend;
+    } catch (err) {
+      log(`WebGPU init failed: ${err}`, "error");
+      state.backend = "cpu";
+      backendSelect.value = "cpu";
+      updateBackendVisibility();
+      webgpuBackend = null;
+      return null;
+    } finally {
+      webgpuBackendPromise = null;
+    }
+  })();
+
+  return webgpuBackendPromise;
+}
+
 function updateFontList() {
   fontList.innerHTML = "";
   for (const font of state.loadedFonts) {
@@ -228,6 +293,7 @@ function addLoadedFont(name: string, source: string) {
 
 function registerFontOnce(name: string, source: ArrayBuffer, label: string, listInUi = true) {
   registerFontSource(name, source);
+  clearEventLayerCache();
   if (!listInUi) return;
   addLoadedFont(name, label);
 }
@@ -252,7 +318,10 @@ async function loadSubtitle(file: File) {
       throw new Error("Failed to parse ASS file");
     }
     state.document = result.document;
+    state.prewarmed = false;
+    state.prewarmPromise = null;
     resetFontCache();
+    clearEventLayerCache();
 
     // Calculate duration from subtitle events
     if (result.document.events?.length) {
@@ -267,6 +336,7 @@ async function loadSubtitle(file: File) {
     await primeLocalFonts();
     resizeCanvas();
     updateTimeDisplay();
+    await prewarmRangeAtLoad();
     renderCurrentFrame();
   } catch (err) {
     log(`Failed to load subtitle: ${err}`, "error");
@@ -512,8 +582,26 @@ function getCanvasSize(): { width: number; height: number } {
 }
 
 function resizeCanvas() {
-  const wrapper = canvas.parentElement!;
+  state.prewarmed = false;
+  state.prewarmPromise = null;
+  const wrapper = canvas2d.parentElement!;
   const wrapperRect = wrapper.getBoundingClientRect();
+  const applyCanvasSize = (
+    canvasEl: HTMLCanvasElement,
+    renderW: number,
+    renderH: number,
+    cssW: number,
+    cssH: number,
+    left: number,
+    top: number,
+  ) => {
+    canvasEl.width = renderW;
+    canvasEl.height = renderH;
+    canvasEl.style.width = `${cssW}px`;
+    canvasEl.style.height = `${cssH}px`;
+    canvasEl.style.left = `${left}px`;
+    canvasEl.style.top = `${top}px`;
+  };
 
   if (!state.timerMode && video.videoWidth > 0) {
     const videoRect = video.getBoundingClientRect();
@@ -527,12 +615,13 @@ function resizeCanvas() {
         ? Math.max(1, Math.round(targetH))
         : Math.max(1, Math.round(videoRect.height * dpr));
 
-      canvas.width = renderW;
-      canvas.height = renderH;
-      canvas.style.width = `${videoRect.width}px`;
-      canvas.style.height = `${videoRect.height}px`;
-      canvas.style.left = `${videoRect.left - wrapperRect.left}px`;
-      canvas.style.top = `${videoRect.top - wrapperRect.top}px`;
+      const left = videoRect.left - wrapperRect.left;
+      const top = videoRect.top - wrapperRect.top;
+      applyCanvasSize(canvas2d, renderW, renderH, videoRect.width, videoRect.height, left, top);
+      applyCanvasSize(canvasWebgl, renderW, renderH, videoRect.width, videoRect.height, left, top);
+      applyCanvasSize(canvasWebgpu, renderW, renderH, videoRect.width, videoRect.height, left, top);
+      if (webglBackend) webglBackend.resize(renderW, renderH);
+      if (webgpuBackend) webgpuBackend.resize(renderW, renderH);
       resizeGraphs();
       return;
     }
@@ -555,12 +644,13 @@ function resizeCanvas() {
   const renderW = Math.max(1, Math.round(w * dpr));
   const renderH = Math.max(1, Math.round(h * dpr));
 
-  canvas.width = renderW;
-  canvas.height = renderH;
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  canvas.style.left = `${(wrapperRect.width - w) / 2}px`;
-  canvas.style.top = `${(wrapperRect.height - h) / 2}px`;
+  const left = (wrapperRect.width - w) / 2;
+  const top = (wrapperRect.height - h) / 2;
+  applyCanvasSize(canvas2d, renderW, renderH, w, h, left, top);
+  applyCanvasSize(canvasWebgl, renderW, renderH, w, h, left, top);
+  applyCanvasSize(canvasWebgpu, renderW, renderH, w, h, left, top);
+  if (webglBackend) webglBackend.resize(renderW, renderH);
+  if (webgpuBackend) webgpuBackend.resize(renderW, renderH);
   resizeGraphs();
 }
 
@@ -580,35 +670,156 @@ function resizeGraphCanvas(graph: HTMLCanvasElement) {
   }
 }
 
-function compositeLayer(layer: BitmapLayer) {
-  const x = Math.round(layer.originX);
-  const y = Math.round(layer.originY);
-  const { width, height, stride, bitmap, color } = layer;
+let frameImageData: ImageData | null = null;
+let frameData: Uint8ClampedArray | null = null;
+let frameW = 0;
+let frameH = 0;
 
-  if (width <= 0 || height <= 0) return;
+function getFrameBuffer(width: number, height: number): ImageData {
+  if (!frameImageData || frameW !== width || frameH !== height) {
+    frameImageData = ctx2d.createImageData(width, height);
+    frameData = frameImageData.data;
+    frameW = width;
+    frameH = height;
+  }
+  frameData!.fill(0);
+  return frameImageData;
+}
 
-  const imageData = ctx.createImageData(width, height);
-  const data = imageData.data;
+function compositeLayerInto(
+  layer: BitmapLayer,
+  width: number,
+  height: number,
+  data: Uint8ClampedArray,
+) {
+  if (!layer.bitmap || layer.width <= 0 || layer.height <= 0) return;
 
-  const [r, g, b, a] = color;
-  const alpha = a / 255;
+  const lw = layer.width;
+  const lh = layer.height;
+  const stride = layer.stride;
+  const src = layer.bitmap;
+  const baseX = Math.round(layer.originX);
+  const baseY = Math.round(layer.originY);
+  const r = layer.color[0];
+  const g = layer.color[1];
+  const b = layer.color[2];
+  const a = layer.color[3];
+  const rounding = (255 * 255) / 2;
 
-  for (let row = 0; row < height; row++) {
-    for (let col = 0; col < width; col++) {
-      const srcIdx = row * stride + col;
-      const dstIdx = (row * width + col) * 4;
-      const coverage = bitmap[srcIdx]! / 255;
-      const finalAlpha = coverage * alpha;
+  for (let y = 0; y < lh; y++) {
+    const dstY = baseY + y;
+    if (dstY < 0 || dstY >= height) continue;
+    const srcRow = y * stride;
+    const dstRow = dstY * width * 4;
+    for (let x = 0; x < lw; x++) {
+      const dstX = baseX + x;
+      if (dstX < 0 || dstX >= width) continue;
+      const mask = src[srcRow + x];
+      if (mask === 0) continue;
 
-      data[dstIdx] = r;
-      data[dstIdx + 1] = g;
-      data[dstIdx + 2] = b;
-      data[dstIdx + 3] = Math.round(finalAlpha * 255);
+      const k = mask * a;
+      const di = dstRow + dstX * 4;
+      const dr = data[di + 0];
+      const dg = data[di + 1];
+      const db = data[di + 2];
+      const da = data[di + 3];
+
+      data[di + 0] = ((k * r + (255 * 255 - k) * dr + rounding) / (255 * 255)) | 0;
+      data[di + 1] = ((k * g + (255 * 255 - k) * dg + rounding) / (255 * 255)) | 0;
+      data[di + 2] = ((k * b + (255 * 255 - k) * db + rounding) / (255 * 255)) | 0;
+      data[di + 3] = ((k * 255 + (255 * 255 - k) * da + rounding) / (255 * 255)) | 0;
+    }
+  }
+}
+
+function compositeLayers(layers: BitmapLayer[], width: number, height: number) {
+  const imageData = getFrameBuffer(width, height);
+  const data = frameData!;
+
+  for (const layer of layers) {
+    compositeLayerInto(layer, width, height, data);
+  }
+
+  // Convert from premultiplied to straight alpha for canvas.
+  for (let y = 0; y < height; y++) {
+    const row = y * width * 4;
+    for (let x = 0; x < width; x++) {
+      const idx = row + x * 4;
+      const alpha = data[idx + 3];
+      if (alpha) {
+        const inv = Math.floor(((255 << 16) / alpha) + 1);
+        const offs = 1 << 15;
+        data[idx + 0] = (data[idx + 0] * inv + offs) >> 16;
+        data[idx + 1] = (data[idx + 1] * inv + offs) >> 16;
+        data[idx + 2] = (data[idx + 2] * inv + offs) >> 16;
+      }
     }
   }
 
-  ctx.globalCompositeOperation = "source-over";
-  ctx.putImageData(imageData, x, y);
+  ctx2d.globalCompositeOperation = "source-over";
+  ctx2d.putImageData(imageData, 0, 0);
+}
+
+function getActiveCanvas(): HTMLCanvasElement {
+  return state.backend === "cpu"
+    ? canvas2d
+    : state.backend === "webgl"
+      ? canvasWebgl
+      : canvasWebgpu;
+}
+
+async function prewarmCurrentFrame() {
+  if (!state.document || state.prewarmed) return;
+  if (state.prewarmPromise) return state.prewarmPromise;
+
+  const timeMs = state.currentTime * 1000;
+  const activeCanvas = getActiveCanvas();
+  const width = activeCanvas.width;
+  const height = activeCanvas.height;
+
+  renderStatus.textContent = "prewarming...";
+  state.prewarmPromise = prewarmFrameFromDocument(
+    state.document,
+    timeMs,
+    width,
+    height,
+  )
+    .catch((err) => {
+      log(`Prewarm failed: ${err}`, "error");
+    })
+    .finally(() => {
+      state.prewarmPromise = null;
+      state.prewarmed = true;
+    });
+  return state.prewarmPromise;
+}
+
+async function prewarmRangeAtLoad() {
+  if (!state.document) return;
+  if (state.prewarmPromise) return state.prewarmPromise;
+  const durationMs = Math.max(0, Math.round(state.duration * 1000));
+  const startMs = 0;
+  const endMs = Math.min(durationMs, 2000);
+  const stepMs = 250;
+  const activeCanvas = getActiveCanvas();
+  const width = activeCanvas.width;
+  const height = activeCanvas.height;
+
+  renderStatus.textContent = "prewarming 0-2s...";
+  state.prewarmPromise = (async () => {
+    for (let t = startMs; t <= endMs; t += stepMs) {
+      await prewarmFrameFromDocument(state.document!, t, width, height);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  })()
+    .catch((err) => {
+      log(`Prewarm range failed: ${err}`, "error");
+    })
+    .finally(() => {
+      state.prewarmPromise = null;
+      state.prewarmed = true;
+    });
+  return state.prewarmPromise;
 }
 
 async function renderCurrentFrame() {
@@ -622,10 +833,9 @@ async function renderCurrentFrame() {
   renderStatus.textContent = "rendering...";
 
   try {
-    const width = canvas.width;
-    const height = canvas.height;
-
-    ctx.clearRect(0, 0, width, height);
+    const activeCanvas = getActiveCanvas();
+    const width = activeCanvas.width;
+    const height = activeCanvas.height;
 
     const startTime = performance.now();
     const result = await renderFrame(state.document, timeMs, width, height);
@@ -637,13 +847,29 @@ async function renderCurrentFrame() {
       if (layer.bitmap) {
         frameBytes += (layer.bitmap as Uint8Array).byteLength ?? layer.bitmap.length ?? 0;
       }
-      compositeLayer(layer);
+    }
+    if (state.backend === "webgl") {
+      const backend = ensureWebGLBackend();
+      if (backend) {
+        backend.render(result.layers, result.frame);
+      } else {
+        compositeLayers(result.layers, width, height);
+      }
+    } else if (state.backend === "webgpu") {
+      const backend = await ensureWebGPUBackend();
+      if (backend) {
+        backend.render(result.layers, result.frame);
+      } else {
+        compositeLayers(result.layers, width, height);
+      }
+    } else {
+      compositeLayers(result.layers, width, height);
     }
     const compositeMs = performance.now() - compositeStart;
     const totalMs = renderMs + compositeMs;
 
     state.lastRenderTime = timeMs;
-    renderStatus.textContent = `${result.layers.length} layers (${totalMs.toFixed(1)}ms)`;
+    renderStatus.textContent = `${result.layers.length} layers (${totalMs.toFixed(1)}ms, ${state.backend})`;
 
     const heapBytes = getHeapBytes();
     perfRender.textContent = `${renderMs.toFixed(2)} ms`;
@@ -653,6 +879,25 @@ async function renderCurrentFrame() {
     perfMemory.textContent = `${formatBytes(frameBytes)} frame, ${
       heapBytes ? formatBytes(heapBytes) : "heap n/a"
     }`;
+    const backendStats =
+      state.backend === "webgl"
+        ? webglBackend?.stats?.()
+        : state.backend === "webgpu"
+          ? webgpuBackend?.stats?.()
+          : null;
+    if (backendStats) {
+      perfGpu.textContent = `draw ${backendStats.drawCalls}, uploads ${backendStats.uploads}, atlas ${backendStats.atlasPages}`;
+    } else {
+      perfGpu.textContent = "-";
+    }
+    const cacheStats = getEventLayerCacheStats();
+    if (cacheStats) {
+      perfCache.textContent =
+        `${cacheStats.entries} ev, ${cacheStats.layers} layers, ${formatBytes(cacheStats.bytes)} ` +
+        `(hit ${cacheStats.hits}, miss ${cacheStats.misses}, evict ${cacheStats.evictions})`;
+    } else {
+      perfCache.textContent = "-";
+    }
     pushHistory(totalMs, frameBytes);
     drawGraphs();
   } catch (err) {
@@ -724,12 +969,13 @@ function stopPlayback() {
   }
 }
 
-function togglePlayPause() {
+async function togglePlayPause() {
   if (state.isPlaying) {
     stopPlayback();
-  } else {
-    startPlayback();
+    return;
   }
+  await prewarmCurrentFrame();
+  startPlayback();
 }
 
 function onTimelineInput() {
@@ -791,6 +1037,8 @@ function onKeyDown(e: KeyboardEvent) {
 
 function init() {
   renderModeToggle.checked = state.renderAtPlayRes;
+  backendSelect.value = state.backend;
+  updateBackendVisibility();
   setFontResolver(async (fontName) => {
     const index = localFontIndex ?? (await buildLocalFontIndex());
     if (!index) return null;
@@ -848,6 +1096,22 @@ function init() {
     state.renderAtPlayRes = renderModeToggle.checked;
     state.lastRenderTime = -1;
     resizeCanvas();
+    renderCurrentFrame();
+  });
+  on(backendSelect, "change", () => {
+    const value = backendSelect.value;
+    if (value === "webgl" || value === "webgpu" || value === "cpu") {
+      state.backend = value;
+    } else {
+      state.backend = "cpu";
+    }
+    updateBackendVisibility();
+    if (state.backend === "webgl") ensureWebGLBackend();
+    if (state.backend === "webgpu") void ensureWebGPUBackend();
+    state.lastRenderTime = -1;
+    resizeCanvas();
+    state.prewarmed = false;
+    state.prewarmPromise = null;
     renderCurrentFrame();
   });
   on(bgMode, "change", applyBackground);

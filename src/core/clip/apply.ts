@@ -50,16 +50,43 @@ export function applyClip(
   },
   clip: ClipShape,
 ): void {
-  const { bitmap, width, height, stride, originX, originY } = layer;
   // Match libass-style integer placement: clip should use the same rounded origin as compositing.
-  const baseX = roundAwayFromZero(originX);
-  const baseY = roundAwayFromZero(originY);
+  const baseX = roundAwayFromZero(layer.originX);
+  const baseY = roundAwayFromZero(layer.originY);
   if (clip.type === "rect") {
     const x0 = clip.x0;
     const y0 = clip.y0;
     const x1 = clip.x1;
     const y1 = clip.y1;
     const inv = clip.inverse;
+    if (!inv) {
+      const layerX0 = baseX;
+      const layerY0 = baseY;
+      const layerX1 = baseX + layer.width;
+      const layerY1 = baseY + layer.height;
+      const ix0 = Math.max(x0, layerX0);
+      const iy0 = Math.max(y0, layerY0);
+      const ix1 = Math.min(x1, layerX1);
+      const iy1 = Math.min(y1, layerY1);
+      if (ix0 <= layerX0 && iy0 <= layerY0 && ix1 >= layerX1 && iy1 >= layerY1) {
+        return;
+      }
+      if (ix1 <= ix0 || iy1 <= iy0) {
+        layer.width = 0;
+        layer.height = 0;
+        layer.bitmap = layer.bitmap.subarray(0, 0);
+        return;
+      }
+      const offsetX = ix0 - layerX0;
+      const offsetY = iy0 - layerY0;
+      layer.bitmap = layer.bitmap.subarray(offsetY * layer.stride + offsetX);
+      layer.width = ix1 - ix0;
+      layer.height = iy1 - iy0;
+      layer.originX = ix0;
+      layer.originY = iy0;
+      return;
+    }
+    const { bitmap, width, height, stride } = layer;
     for (let y = 0; y < height; y++) {
       const dstY = baseY + y;
       const row = y * stride;
@@ -75,6 +102,7 @@ export function applyClip(
   }
 
   const mask = clip;
+  const { bitmap, width, height, stride } = layer;
   const inv = mask.inverse;
   for (let y = 0; y < height; y++) {
     const dstY = baseY + y;

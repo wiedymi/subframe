@@ -6,6 +6,8 @@ import { createTraceContext, toFrameTrace } from "./trace";
 import { activeEventsAtTime, computeParScaleX, frameContextFromDocument } from "./frame";
 import { createShapeContext, releaseGlyphBuffer } from "./shape/shaper";
 import { renderEvent } from "./pipeline/event";
+import { endFrameProfile, setEventCount, setLayerCount, startFrameProfile } from "./profile";
+export { getEventLayerCacheStats, clearEventLayerCache } from "./pipeline/event";
 
 export type RenderResult = {
   layers: BitmapLayer[];
@@ -20,6 +22,9 @@ async function renderFrameInternal(
   height?: number,
   traceCtx?: TraceContext,
 ): Promise<RenderResult> {
+  const profileEnabled =
+    typeof process !== "undefined" && !!(process as any).env?.SUBFRAME_PROFILE;
+  const profile = startFrameProfile(profileEnabled);
   const frame = frameContextFromDocument(doc, timeMs, width, height);
   const scaleBorderAndShadow = doc.info.scaleBorderAndShadow;
   const playResX = doc.info.playResX || frame.width;
@@ -45,6 +50,7 @@ async function renderFrameInternal(
         : (baseContentHeight * frame.width) / baseContentWidth
       : frame.height;
   const activeEvents = activeEventsAtTime(doc, timeMs);
+  if (profile) setEventCount(activeEvents.length);
 
   const layers: BitmapLayer[] = [];
   const shapeCtx = createShapeContext();
@@ -83,6 +89,31 @@ async function renderFrameInternal(
       return a.order - b.order;
     })
     .map((entry) => entry.layer);
+
+  if (profile) {
+    setLayerCount(sortedLayers.length);
+    const done = endFrameProfile();
+    if (done) {
+      const blurPct = done.frameMs > 0 ? (done.blurMs / done.frameMs) * 100 : 0;
+      const layoutPct = done.frameMs > 0 ? (done.layoutMs / done.frameMs) * 100 : 0;
+      const rasterPct = done.frameMs > 0 ? (done.rasterMs / done.frameMs) * 100 : 0;
+      const shapePct = done.frameMs > 0 ? (done.shapeMs / done.frameMs) * 100 : 0;
+      const fontPct = done.frameMs > 0 ? (done.fontMs / done.frameMs) * 100 : 0;
+      console.log(
+        `[subframe] frame=${done.frameMs.toFixed(2)}ms layout=${done.layoutMs.toFixed(2)}ms (${layoutPct.toFixed(
+          1,
+        )}%) raster=${done.rasterMs.toFixed(2)}ms (${rasterPct.toFixed(
+          1,
+        )}%) blur=${done.blurMs.toFixed(2)}ms (${blurPct.toFixed(
+          1,
+        )}%) shape=${done.shapeMs.toFixed(2)}ms (${shapePct.toFixed(
+          1,
+        )}%) font=${done.fontMs.toFixed(2)}ms (${fontPct.toFixed(
+          1,
+        )}%) events=${done.eventCount} layers=${done.layerCount}`,
+      );
+    }
+  }
 
   return { layers: sortedLayers, activeEvents, frame };
 }

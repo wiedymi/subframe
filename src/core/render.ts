@@ -32,6 +32,15 @@ export async function renderFrameFromDocument(
   };
 }
 
+export async function prewarmFrameFromDocument(
+  document: SubtitleDocument,
+  timeMs: number,
+  width?: number,
+  height?: number,
+): Promise<void> {
+  await renderFrame(document, timeMs, width, height);
+}
+
 export async function renderFrameFromDocumentWithTrace(
   document: SubtitleDocument,
   timeMs: number,

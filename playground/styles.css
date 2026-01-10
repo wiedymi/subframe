@@ -94,7 +94,9 @@ main {
   display: none;
 }
 
-#subtitle-canvas {
+#subtitle-canvas-2d,
+#subtitle-canvas-webgl,
+#subtitle-canvas-webgpu {
   position: absolute;
   top: 0;
   left: 0;
@@ -175,6 +177,25 @@ main {
 
 .toggle input {
   accent-color: var(--fg);
+}
+
+.select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.controls .select select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 6px;
+  font-family: var(--font);
+  font-size: 10px;
+  height: 24px;
 }
 
 .panel {

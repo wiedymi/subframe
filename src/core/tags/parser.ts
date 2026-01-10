@@ -2,6 +2,11 @@ import type { SubtitleEvent, TextSegment } from "subforge/core";
 import { parseTags } from "subforge/ass";
 import { injectAnimateEffects, injectBlurEffects, injectDrawingEffects, injectKaraokeAbsoluteEffects, splitTagBlock } from "../animate/parser";
 
+const segmentCache = new WeakMap<
+  SubtitleEvent,
+  { text: string; wrapStyle: number; segments: TextSegment[] }
+>();
+
 function hasTagsOrEscapes(text: string): boolean {
   const idxBrace = text.indexOf("{");
   if (idxBrace !== -1) return true;
@@ -96,6 +101,16 @@ export function resolveSegments(
 ): TextSegment[] {
   if (ev.segments && ev.segments.length > 0 && !ev.dirty) return ev.segments;
   if (!ev.text) return [];
+  if (!ev.dirty) {
+    const cached = segmentCache.get(ev);
+    if (
+      cached &&
+      cached.text === ev.text &&
+      cached.wrapStyle === initialWrapStyle
+    ) {
+      return cached.segments;
+    }
+  }
   if (hasTagsOrEscapes(ev.text)) {
     let normalized = normalizeAssNewlines(ev.text, initialWrapStyle);
     if (normalized.includes("\\K"))
@@ -109,7 +124,20 @@ export function resolveSegments(
     if (ev.text.includes("\\kt"))
       injectKaraokeAbsoluteEffects(ev.text, segments);
     if (ev.text.includes("\\p")) injectDrawingEffects(ev.text, segments);
+    if (!ev.dirty)
+      segmentCache.set(ev, {
+        text: ev.text,
+        wrapStyle: initialWrapStyle,
+        segments,
+      });
     return segments;
   }
-  return [{ text: ev.text, style: null, effects: [] }];
+  const segments = [{ text: ev.text, style: null, effects: [] }];
+  if (!ev.dirty)
+    segmentCache.set(ev, {
+      text: ev.text,
+      wrapStyle: initialWrapStyle,
+      segments,
+    });
+  return segments;
 }

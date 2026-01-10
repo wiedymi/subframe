@@ -76,6 +76,11 @@ export type LineItem = {
   karaokeEnd: number | null;
   karaokeMode: "fill" | "fade" | "outline" | null;
   fadeFactor: number;
+  fadeSimple?: { in: number; out: number } | null;
+  fadeComplex?: {
+    alphas: [number, number, number];
+    times: [number, number, number, number];
+  } | null;
 };
 
 export type Line = {
@@ -84,9 +89,34 @@ export type Line = {
   ascent: number;
   descent: number;
   height: number;
+  cacheable?: boolean;
+  minX?: number;
+  maxX?: number;
+  segStartX?: number[];
+  segWidth?: number[];
 };
 
 export type Token = { text: string; isSpace: boolean; start: number; end: number };
+
+const TOKEN_CACHE_LIMIT = 4096;
+const tokenCache = new Map<string, Token[]>();
+
+function getTokenCache(text: string): Token[] | null {
+  const cached = tokenCache.get(text) ?? null;
+  if (cached) {
+    tokenCache.delete(text);
+    tokenCache.set(text, cached);
+  }
+  return cached;
+}
+
+function setTokenCache(text: string, tokens: Token[]): void {
+  tokenCache.set(text, tokens);
+  if (tokenCache.size > TOKEN_CACHE_LIMIT) {
+    const first = tokenCache.keys().next();
+    if (!first.done) tokenCache.delete(first.value);
+  }
+}
 
 export function recomputeLineMetrics(line: Line): void {
   let width = 0;
@@ -163,8 +193,10 @@ function isTrimWhitespaceCodepoint(
 }
 
 export function tokenize(text: string): Token[] {
+  if (text.length === 0) return [];
+  const cached = getTokenCache(text);
+  if (cached) return cached;
   const tokens: Token[] = [];
-  if (text.length === 0) return tokens;
 
   const codepoints: number[] = [];
   const starts: number[] = [];
@@ -236,5 +268,6 @@ export function tokenize(text: string): Token[] {
     }
   }
 
+  setTokenCache(text, tokens);
   return tokens;
 }

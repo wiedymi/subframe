@@ -1,5 +1,6 @@
 import { BitmapBuilder, PixelMode } from "text-shaper";
 import { libassGaussianBlur } from "../libass_blur";
+import { addBlurMs, isProfiling, profileNow } from "../profile";
 import { SUBPIXEL_SCALE, toFixed26_6, fromFixed26_6 } from "../math/fixed";
 
 export function beBlurPre(
@@ -84,17 +85,23 @@ export function beBlurOnce(
   }
 }
 
+let beBlurTmp = new Uint16Array(0);
+
 export function applyBeBlur(
   bitmap: { buffer: Uint8Array; width: number; rows: number; pitch: number },
   passes: number,
 ): void {
+  const start = isProfiling() ? profileNow() : 0;
   const be = Math.max(0, Math.round(passes));
   if (be <= 0) return;
   const width = bitmap.width;
   const height = bitmap.rows;
   if (width <= 1 || height <= 1) return;
   const stride = bitmap.pitch;
-  const tmp = new Uint16Array(stride * 2);
+  if (beBlurTmp.length < stride * 2) {
+    beBlurTmp = new Uint16Array(stride * 2);
+  }
+  const tmp = beBlurTmp;
   let remaining = be;
   if (--remaining > 0) {
     beBlurPre(bitmap.buffer, stride, width, height);
@@ -104,6 +111,7 @@ export function applyBeBlur(
     beBlurPost(bitmap.buffer, stride, width, height);
   }
   beBlurOnce(bitmap.buffer, stride, width, height, tmp);
+  if (isProfiling()) addBlurMs(profileNow() - start);
 }
 
 export function bePadding(passes: number): number {
@@ -212,6 +220,7 @@ export function applyLibassGaussianBlur(
 } {
   if (!(sigmaX > 0 || sigmaY > 0)) return glyph;
   if (glyph.bitmap.pixelMode !== PixelMode.Gray) return glyph;
+  const start = isProfiling() ? profileNow() : 0;
   const r2x = sigmaX * sigmaX;
   const r2y = sigmaY * sigmaY;
   const blurred = libassGaussianBlur(
@@ -226,6 +235,7 @@ export function applyLibassGaussianBlur(
     r2x,
     r2y,
   );
+  if (isProfiling()) addBlurMs(profileNow() - start);
   return {
     bitmap: blurred.bitmap,
     bearingX: glyph.bearingX - blurred.shiftX,
