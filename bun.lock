@@ -6,7 +6,7 @@
       "name": "subframe",
       "dependencies": {
         "subforge": "0.1.3",
-        "text-shaper": "0.1.17",
+        "text-shaper": "0.1.23",
       },
       "devDependencies": {
         "pngjs": "^7.0.0",
@@ -18,7 +18,7 @@
 
     "subforge": ["subforge@0.1.3", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-yBfY3tmpTdU7HqQDj+2wAHiVw+z8G6Mve/Wb3QQC3eFalGG2eVPJodIggMmcNbrwi+g4bvQCGJG3vkgWR9goLA=="],
 
-    "text-shaper": ["text-shaper@0.1.17", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-tBG9N2dicwv3WisJ4MkSv4xIEafyB3aSjVY6LYIRbF1eNF7aKoRqQuYQFGtEafwwUS2SXtbUqlYI6NvriMuQyA=="],
+    "text-shaper": ["text-shaper@0.1.23", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-kBItvxckAzS4JkcferjxbXN7tFir/RDUBcxk1aKe2Z9QqtmoddGezmwFOc7xBjKKF/Nf9JVDCWXnK6XNVzTjIA=="],
 
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
   }

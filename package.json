@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "subforge": "0.1.3",
-    "text-shaper": "0.1.17"
+    "text-shaper": "0.1.23"
   },
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm",
