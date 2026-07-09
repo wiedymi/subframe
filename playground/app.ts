@@ -8,6 +8,10 @@ import {
   registerFontSource,
   resetFontCache,
   setFontResolver,
+  buildLocalFontIndex,
+  getLocalFontBuffer,
+  resolveBestLocalFontEntry,
+  sanitizeFontName,
   createWebGLBackend,
   createWebGPUBackend,
   getEventLayerCacheStats,
@@ -19,9 +23,11 @@ import {
   setWorkerSource,
   getFramePipelineStats,
   resetFramePipeline,
+  Subframe,
   type CompositorBackend,
+  type SubframeFrame,
 } from "../src";
-import { RenderAheadPlayer, type BufferedFrame, type RenderAheadStats } from "./render-ahead";
+import { RenderAheadPlayer, type BufferedFrame, type RenderAheadStats } from "../src/player/render-ahead";
 import type { BitmapLayer } from "../src/core/data/types";
 import { libassGaussianBlur } from "../src/core/libass_blur";
 import { GpuBlurEngine } from "../src/backend/webgpu/blur";
@@ -135,11 +141,14 @@ let defaultBackendSelected = false;
 // uniform media grid into a bounded buffer (feeding the core ring/hybrid prefetch
 // consistent future timestamps) and a display loop presents them at a steady
 // vsync-multiple cadence, so the on-screen cadence no longer equals render latency.
-let player: RenderAheadPlayer | null = null;
+let player: RenderAheadPlayer<SubframeFrame> | null = null;
+let playbackSubframe: Subframe | null = null;
+let playbackSubframeDoc: SubtitleDocument | null = null;
+let workersRequested = true;
 // Backend resolved ONCE at play start so present() is synchronous (no per-frame
 // `await ensureWebGPUBackend()`); null => CPU composite path.
 let activeBackendRef: CompositorBackend | null = null;
-let lastPresentedFrame: BufferedFrame | null = null;
+let lastPresentedFrame: BufferedFrame<SubframeFrame> | null = null;
 let baselinePipeline = getFramePipelineStats();
 
 function log(msg: string, level: "info" | "warn" | "error" = "info") {
@@ -381,6 +390,11 @@ async function loadSubtitle(file: File) {
       throw new Error("Failed to parse ASS file");
     }
     state.document = result.document;
+    playbackSubframeDoc = null;
+    if (playbackSubframe) {
+      playbackSubframe.setDocument(result.document);
+      playbackSubframeDoc = result.document;
+    }
     state.prewarmed = false;
     state.prewarmPromise = null;
     resetFontCache();
@@ -420,199 +434,21 @@ async function loadFontFile(file: File) {
   }
 }
 
-type LocalFontData = {
-  family: string;
-  fullName?: string;
-  postscriptName?: string;
-  style?: string;
-  blob: () => Promise<Blob>;
-};
-
-let localFontIndex: Map<string, LocalFontData> | null = null;
-let localFontIndexPromise: Promise<Map<string, LocalFontData> | null> | null = null;
-const localFontBufferCache = new WeakMap<LocalFontData, Promise<ArrayBuffer>>();
-let localFontList: LocalFontData[] | null = null;
-const localFontAliasCache = new Map<string, LocalFontData>();
-
-function normalizeFontKey(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-
-function sanitizeFontName(name: string): string {
-  return name
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .trim()
-    .replace(/^@+/, "")
-    .replace(/^["']+|["']+$/g, "");
-}
-
-function nameHasStyle(name: string, style: string): boolean {
-  const lower = name.toLowerCase();
-  const s = style.toLowerCase();
-  return lower.includes(s);
-}
-
-function scoreFontEntry(requested: string, entry: LocalFontData): number {
-  const req = requested.toLowerCase();
-  const reqNorm = normalizeFontKey(requested);
-  const names = [entry.fullName ?? "", entry.family ?? "", entry.postscriptName ?? ""];
-  let score = 0;
-  for (const name of names) {
-    if (!name) continue;
-    const lower = name.toLowerCase();
-    if (lower === req) score = Math.max(score, 100);
-    const norm = normalizeFontKey(name);
-    if (norm && reqNorm && norm === reqNorm) score = Math.max(score, 90);
-    if (req && lower.includes(req)) score = Math.max(score, 70);
-    if (reqNorm && norm && norm.includes(reqNorm)) score = Math.max(score, 60);
-  }
-
-  const style = entry.style ?? "";
-  if (style) {
-    if (!/(bold|italic|oblique|black|light|thin|regular)/i.test(requested)) {
-      if (/regular/i.test(style)) score += 5;
-      if (/bold|italic|oblique|black|light|thin/i.test(style)) score -= 2;
-    } else if (nameHasStyle(requested, style)) {
-      score += 5;
-    }
-  }
-
-  return score;
-}
-
-function findFontEntryByIncludes(name: string): LocalFontData | null {
-  if (!localFontList || localFontList.length === 0) return null;
-  const cached = localFontAliasCache.get(name);
-  if (cached) return cached;
-  const needle = name.toLowerCase();
-  const needleNorm = normalizeFontKey(name);
-  let match: LocalFontData | null = null;
-  for (const entry of localFontList) {
-    const fullName = entry.fullName ?? "";
-    const family = entry.family ?? "";
-    const postscriptName = entry.postscriptName ?? "";
-    const fullLower = fullName.toLowerCase();
-    const familyLower = family.toLowerCase();
-    const postLower = postscriptName.toLowerCase();
-    if (fullLower.includes(needle) || familyLower.includes(needle) || postLower.includes(needle)) {
-      match = entry;
-      break;
-    }
-    if (needleNorm) {
-      const fullNorm = normalizeFontKey(fullName);
-      const familyNorm = normalizeFontKey(family);
-      const postNorm = normalizeFontKey(postscriptName);
-      if (
-        (fullNorm && fullNorm.includes(needleNorm)) ||
-        (familyNorm && familyNorm.includes(needleNorm)) ||
-        (postNorm && postNorm.includes(needleNorm))
-      ) {
-        match = entry;
-        break;
-      }
-    }
-  }
-  if (match) localFontAliasCache.set(name, match);
-  return match;
-}
-
-function resolveBestFontEntry(name: string, index: Map<string, LocalFontData>): LocalFontData | null {
-  const cached = localFontAliasCache.get(name);
-  if (cached) return cached;
-  const key = name.toLowerCase();
-  const normKey = normalizeFontKey(name);
-  const direct = index.get(key) ?? (normKey ? index.get(normKey) : undefined);
-  if (!localFontList || localFontList.length === 0) {
-    if (direct) localFontAliasCache.set(name, direct);
-    return direct ?? null;
-  }
-  let best: LocalFontData | null = null;
-  let bestScore = 0;
-  for (const entry of localFontList) {
-    const score = scoreFontEntry(name, entry);
-    if (score > bestScore) {
-      bestScore = score;
-      best = entry;
-    }
-  }
-  if (!best) best = direct ?? findFontEntryByIncludes(name);
-  if (best) localFontAliasCache.set(name, best);
-  return best;
-}
-
-function getLocalFontBuffer(entry: LocalFontData): Promise<ArrayBuffer> {
-  const cached = localFontBufferCache.get(entry);
-  if (cached) return cached;
-  const load = entry
-    .blob()
-    .then((blob) => blob.arrayBuffer())
-    .catch((err) => {
-      localFontBufferCache.delete(entry);
-      throw err;
-    });
-  localFontBufferCache.set(entry, load);
-  return load;
-}
-
-async function buildLocalFontIndex(): Promise<Map<string, LocalFontData> | null> {
-  if (!("queryLocalFonts" in window)) return null;
-  if (localFontIndex) return localFontIndex;
-  if (localFontIndexPromise) return localFontIndexPromise;
-  localFontIndexPromise = (async () => {
-    try {
-      log("Indexing local fonts (lazy resolver)...");
-      const fonts = await (window as any).queryLocalFonts();
-      const list = fonts as LocalFontData[];
-      const index = new Map<string, LocalFontData>();
-      localFontAliasCache.clear();
-      for (const fontData of list) {
-        const family = fontData.family ?? "";
-        const fullName = fontData.fullName ?? "";
-        const postscriptName = fontData.postscriptName ?? "";
-        if (family) {
-          const familyKey = family.toLowerCase();
-          if (!index.has(familyKey)) index.set(familyKey, fontData);
-          const familyNorm = normalizeFontKey(family);
-          if (familyNorm && !index.has(familyNorm)) index.set(familyNorm, fontData);
-        }
-        if (fullName) {
-          const fullKey = fullName.toLowerCase();
-          if (!index.has(fullKey)) index.set(fullKey, fontData);
-          const fullNorm = normalizeFontKey(fullName);
-          if (fullNorm && !index.has(fullNorm)) index.set(fullNorm, fontData);
-        }
-        if (postscriptName) {
-          const postKey = postscriptName.toLowerCase();
-          if (!index.has(postKey)) index.set(postKey, fontData);
-          const postNorm = normalizeFontKey(postscriptName);
-          if (postNorm && !index.has(postNorm)) index.set(postNorm, fontData);
-        }
-      }
-      localFontList = list;
-      log(`Indexed ${index.size} local font families`);
-      resetFontCache();
-      if (state.document) {
-        state.lastRenderTime = -1;
-        renderCurrentFrame();
-      }
-      return index;
-    } catch (err) {
-      log(`Failed to query local fonts: ${err}`, "error");
-      return null;
-    } finally {
-      localFontIndexPromise = null;
-    }
-  })();
-  localFontIndex = await localFontIndexPromise;
-  return localFontIndex;
-}
-
 async function primeLocalFonts() {
   if (!("queryLocalFonts" in window)) {
     log("No local font access; load fonts via file input for browser rendering.", "warn");
     return;
   }
-  await buildLocalFontIndex();
+  log("Indexing local fonts (lazy resolver)...");
+  const index = await buildLocalFontIndex();
+  if (index) {
+    log(`Indexed ${index.size} local font families`);
+    resetFontCache();
+    if (state.document) {
+      state.lastRenderTime = -1;
+      renderCurrentFrame();
+    }
+  }
 }
 
 async function queryLocalFonts() {
@@ -1014,7 +850,7 @@ async function resolveActiveBackend(): Promise<CompositorBackend | null> {
 
 // Present a produced frame to the active canvas. Fully synchronous: the backend was
 // resolved at play start (activeBackendRef), so the display loop never awaits.
-function presentBufferedFrame(frame: BufferedFrame): void {
+function presentBufferedFrame(frame: BufferedFrame<SubframeFrame>): void {
   const result = frame.result;
   if ((state.backend === "webgl" || state.backend === "webgpu") && activeBackendRef) {
     activeBackendRef.render(result.layers, result.frame);
@@ -1029,9 +865,9 @@ function presentBufferedFrame(frame: BufferedFrame): void {
   state.lastRenderTime = frame.timeMs;
 }
 
-function releaseBufferedFrame(frame: BufferedFrame | null): void {
+function releaseBufferedFrame(frame: BufferedFrame<SubframeFrame> | null): void {
   if (!frame) return;
-  releaseRenderResult(frame.result);
+  frame.result.release();
 }
 
 function clearLastPresentedFrame(): void {
@@ -1110,11 +946,32 @@ function updateGpuFilterNote(s: RenderAheadStats, result: { layers: BitmapLayer[
   }
 }
 
-function ensurePlayer(): RenderAheadPlayer {
+function ensurePlaybackSubframe(): Subframe {
+  if (playbackSubframe) return playbackSubframe;
+  playbackSubframe = new Subframe({
+    workers: workersRequested,
+    workerUrl: workersRequested ? "/worker-entry.js" : undefined,
+  });
+  if (state.document) {
+    playbackSubframe.setDocument(state.document);
+    playbackSubframeDoc = state.document;
+  }
+  return playbackSubframe;
+}
+
+function ensurePlayer(): RenderAheadPlayer<SubframeFrame> {
   if (player) return player;
-  player = new RenderAheadPlayer(
+  player = new RenderAheadPlayer<SubframeFrame>(
     {
-      render: (doc, t, w, h) => renderFrame(doc, t, w, h),
+      render: (doc, t, w, h) => {
+        const sf = ensurePlaybackSubframe();
+        sf.resize(w, h);
+        if (playbackSubframeDoc !== doc) {
+          sf.setDocument(doc);
+          playbackSubframeDoc = doc;
+        }
+        return sf.frame(t);
+      },
       present: presentBufferedFrame,
       release: releaseBufferedFrame,
       width: () => getActiveCanvas().width,
@@ -1135,6 +992,13 @@ function ensurePlayer(): RenderAheadPlayer {
 async function startTimerPlayback(): Promise<void> {
   if (!state.document) return;
   activeBackendRef = await resolveActiveBackend();
+  const sf = ensurePlaybackSubframe();
+  const activeCanvas = getActiveCanvas();
+  sf.resize(activeCanvas.width, activeCanvas.height);
+  if (playbackSubframeDoc !== state.document) {
+    sf.setDocument(state.document);
+    playbackSubframeDoc = state.document;
+  }
   resetFramePipeline();
   baselinePipeline = getFramePipelineStats();
   // A restart (seek while playing) replaces the player's buffer; release the
@@ -1808,7 +1672,7 @@ function init() {
   // scripts — is gone: worker caches, arena freelists, and scratch pools are
   // byte-bounded end-to-end (beastars steady heap ~106MB with 8 workers), and
   // the boundary/ring machinery that carries realtime playback needs the pool.
-  const workersRequested = new URLSearchParams(location.search).get("workers") !== "0";
+  workersRequested = new URLSearchParams(location.search).get("workers") !== "0";
   if (workersRequested) {
     void (async () => {
       try {
@@ -1827,11 +1691,11 @@ function init() {
     log("Worker pool off (?workers=0); inline prewarm only");
   }
   setFontResolver(async (fontName) => {
-    const index = localFontIndex ?? (await buildLocalFontIndex());
+    const index = await buildLocalFontIndex();
     if (!index) return null;
     const cleanedName = sanitizeFontName(fontName);
     const key = cleanedName.toLowerCase();
-    const entry = resolveBestFontEntry(cleanedName, index);
+    const entry = resolveBestLocalFontEntry(cleanedName, index);
     if (!entry) return null;
     const buffer = await getLocalFontBuffer(entry);
     const familyKey = entry.family.toLowerCase();
@@ -1989,6 +1853,11 @@ function init() {
     if (player) {
       player.stop();
       player = null;
+    }
+    if (playbackSubframe) {
+      playbackSubframe.dispose();
+      playbackSubframe = null;
+      playbackSubframeDoc = null;
     }
     clearLastPresentedFrame();
     if (state.timerAnimationId !== null) {

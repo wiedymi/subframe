@@ -21,6 +21,7 @@ import {
   setGpuFilterDeferEnabled,
   releaseRenderResult,
   registerFontSource,
+  Subframe,
   type CompositorBackend,
 } from "../../src";
 import { getWorkerPoolStats, isWorkerPoolUsable, setWorkerCount } from "../../src/core/worker-pool";
@@ -36,6 +37,7 @@ const FRAME_MS = 1000 / 60;
 const ONLY_FIXTURES = (QS.get("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const ONLY_CONFIGS = (QS.get("configs") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const ALLOC_CENSUS_ENABLED = QS.get("allocCensus") === "1";
+const USE_CLASS_PATH = QS.get("classPath") === "1";
 if (QS.get("sabArenas") === "0" || QS.get("sabArenas") === "1") {
   (globalThis as any).__SUBFRAME_SAB_ARENAS__ = QS.get("sabArenas");
 }
@@ -108,6 +110,28 @@ console.warn = (...args: unknown[]) => {
   capturedWarnings.push(args.map((a) => String(a)).join(" "));
   origWarn(...args);
 };
+
+async function resolveBenchFont(name: string): Promise<ArrayBuffer | null> {
+  // Retry: transient network-level fetch failures were observed in headless
+  // Chrome while the page is under full render + worker-boot load.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`/font?name=${encodeURIComponent(name)}`);
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+      // Register the source so the pool's font sync can forward it to workers
+      // (mirrors the playground resolver, which registers everything it loads).
+      registerFontSource(name, buf);
+      return buf;
+    } catch (err) {
+      await post("/log", {
+        msg: `font fetch failed attempt=${attempt} name=${name}: ${String(err)}`,
+      });
+      await sleep(100);
+    }
+  }
+  return null;
+}
 
 type Fixture = { id: string; file: string; t0: number };
 type Config = {
@@ -251,7 +275,7 @@ async function runOne(
   // the browser (results arrive via onmessage; no sync-drain segfault risk).
   setWorkerPool(false);
   setWorkerCount(config.workerCount === undefined ? null : config.workerCount);
-  setWorkerPool(config.workers);
+  if (!USE_CLASS_PATH) setWorkerPool(config.workers);
   // Choose the frame-pipeline path. Hybrid (ring primary + scatter fallback)
   // overrides the scatter/ring selection when set; otherwise scatter (default)
   // vs whole-frame ring baseline.
@@ -296,9 +320,23 @@ async function runOne(
     };
   }
 
+  const sf = USE_CLASS_PATH
+    ? new Subframe({ workers: config.workers, fontResolver: resolveBenchFont })
+    : null;
+  if (sf) {
+    sf.resize(W, H);
+    sf.setDocument(doc);
+    await sf.ready;
+  }
+
   const prepareStart = performance.now();
-  const prepared = await prepareDocument(doc, W, H, { timeMs: fixture.t0, boundaryWarmupMs: 500 });
-  releaseRenderResult(prepared);
+  if (sf) {
+    const prepared = await sf.frame(fixture.t0);
+    prepared.release();
+  } else {
+    const prepared = await prepareDocument(doc, W, H, { timeMs: fixture.t0, boundaryWarmupMs: 500 });
+    releaseRenderResult(prepared);
+  }
   const prepareMs = performance.now() - prepareStart;
 
   const cache0 = getEventLayerCacheStats();
@@ -325,7 +363,7 @@ async function runOne(
     if (now < target) await sleep(target - now);
     const t = fixture.t0 + i * FRAME_MS;
     const a = performance.now();
-    const result = await renderFrame(doc, t, W, H);
+    const result = sf ? await sf.frame(t) : await renderFrame(doc, t, W, H);
     const b = performance.now();
     reassembleMs[i] = measureReassembleMs(result.layers);
     const b2 = performance.now();
@@ -340,7 +378,8 @@ async function runOne(
     }
     layerCounts[i] = result.layers.length;
     gpuRoutedCounts[i] = routed;
-    releaseRenderResult(result);
+    if (sf) result.release();
+    else releaseRenderResult(result);
     if (result.activeEvents.length > activeEventsMax) activeEventsMax = result.activeEvents.length;
     const rendered = i + 1;
     if (rendered % 60 === 0 || rendered === FRAMES) {
@@ -356,6 +395,11 @@ async function runOne(
   const cache1 = getEventLayerCacheStats();
   const pool1 = getWorkerPoolStats();
   const framePipeline1 = getFramePipelineStats();
+  if (USE_CLASS_PATH && config.workers && !pool1.active) {
+    throw new Error("Subframe class path worker pool is inactive");
+  }
+  const workerPoolUsableAfter = isWorkerPoolUsable();
+  sf?.dispose();
 
   if (config.profile) {
     console.log = origLog;
@@ -396,7 +440,7 @@ async function runOne(
       boundaryStale: framePipeline1.boundaryStale - framePipeline0.boundaryStale,
       boundaryDepth: framePipeline1.boundaryDepth,
     },
-    workerPoolUsableAfter: isWorkerPoolUsable(),
+    workerPoolUsableAfter,
     newWarnings: capturedWarnings.slice(warningsBefore),
     cacheDelta: {
       hits: cache1.hits - cache0.hits,
@@ -417,6 +461,7 @@ async function main() {
     crossOriginIsolated: (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
     sharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
     sabArenasFlag: (globalThis as any).__SUBFRAME_SAB_ARENAS__ ?? "default",
+    classPath: USE_CLASS_PATH,
     hardwareConcurrency: navigator.hardwareConcurrency,
     webgpu: "gpu" in navigator,
     devicePixelRatio: devicePixelRatio,
@@ -424,30 +469,9 @@ async function main() {
 
   // Same wiring as the playground: the driver serves a bundled worker entry at
   // /worker-entry.js; point the pool at it before the first render.
-  setWorkerSource("/worker-entry.js");
+  if (!USE_CLASS_PATH) setWorkerSource("/worker-entry.js");
 
-  setFontResolver(async (name: string) => {
-    // Retry: transient network-level fetch failures were observed in headless
-    // Chrome while the page is under full render + worker-boot load.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const res = await fetch(`/font?name=${encodeURIComponent(name)}`);
-        if (!res.ok) return null;
-        const buf = await res.arrayBuffer();
-        // Register the source so the pool's font sync can forward it to
-        // workers (mirrors the playground resolver, which registers
-        // everything it loads).
-        registerFontSource(name, buf);
-        return buf;
-      } catch (err) {
-        await post("/log", {
-          msg: `font fetch failed attempt=${attempt} name=${name}: ${String(err)}`,
-        });
-        await sleep(100);
-      }
-    }
-    return null;
-  });
+  setFontResolver(resolveBenchFont);
 
   const sharedBackend = await createWebGPUBackend({ canvas: makeCanvas() });
 

@@ -37,10 +37,12 @@ const qs = new URLSearchParams();
 {
   const only = argVal("--only");
   const configs = argVal("--configs");
-  const frames = argVal("--frames");
-  if (only) qs.set("only", only);
-  if (configs) qs.set("configs", configs);
-  if (frames) qs.set("frames", frames);
+const frames = argVal("--frames");
+const classPath = argv.includes("--class-path");
+if (only) qs.set("only", only);
+if (configs) qs.set("configs", configs);
+if (frames) qs.set("frames", frames);
+if (classPath) qs.set("classPath", "1");
   if (allocCensus) qs.set("allocCensus", "1");
   if (process.env.SUBFRAME_SAB_ARENAS === "0" || process.env.SUBFRAME_SAB_ARENAS === "1") {
     qs.set("sabArenas", process.env.SUBFRAME_SAB_ARENAS);

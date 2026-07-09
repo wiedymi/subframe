@@ -28,7 +28,7 @@
     "text-shaper": "0.1.24"
   },
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm && bun build ./src/core/worker-entry.ts --outdir ./dist --target browser --format esm",
+    "build": "bun run tools/build-inline-worker.ts && bun build ./src/index.ts --outdir ./dist --target browser --format esm && bun build ./src/core/worker-entry.ts --outdir ./dist --target browser --format esm",
     "playground": "bun playground/server.ts",
     "test:golden": "bun run tools/run-golden.ts",
     "test:golden:smoke": "bun run tools/run-golden.ts -- --case parity_smoke",

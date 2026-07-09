@@ -3,6 +3,7 @@ import { Font } from "text-shaper";
 const cache = new Map<string, Promise<Font>>();
 const sourceMap = new Map<string, FontSource>();
 let fontResolver: FontResolver | null = null;
+let fontResolverBeforeRegistered = false;
 const styleCachePrefix = "__style__:";
 const styleBasePrefix = "__style_base__:";
 
@@ -70,6 +71,11 @@ export function resetFontCache(): void {
   cache.clear();
 }
 
+export function clearRegisteredFontSourcesForTests(): void {
+  sourceMap.clear();
+  cache.clear();
+}
+
 export function registerFontSource(fontName: string, source: FontSource): void {
   if (!fontName) return;
   sourceMap.set(fontName, source);
@@ -77,8 +83,12 @@ export function registerFontSource(fontName: string, source: FontSource): void {
   cache.delete(fontName);
 }
 
-export function setFontResolver(resolver: FontResolver | null): void {
+export function setFontResolver(
+  resolver: FontResolver | null,
+  options: { beforeRegistered?: boolean } = {},
+): void {
   fontResolver = resolver;
+  fontResolverBeforeRegistered = options.beforeRegistered === true;
 }
 
 // Snapshot of registered font sources that survive structured clone across a
@@ -100,9 +110,15 @@ export function snapshotFontSources(): Array<{
 }
 
 async function resolveFontSource(fontName: string): Promise<FontSource | null> {
+  let resolverTried = false;
+  if (fontResolverBeforeRegistered && fontResolver) {
+    resolverTried = true;
+    const resolved = await fontResolver(fontName);
+    if (resolved) return resolved;
+  }
   const direct = sourceMap.get(fontName) ?? sourceMap.get(fontName.toLowerCase());
   if (direct) return direct;
-  if (!fontResolver) return null;
+  if (!fontResolver || resolverTried) return null;
   const resolved = await fontResolver(fontName);
   return resolved ?? null;
 }

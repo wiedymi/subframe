@@ -33,7 +33,7 @@ import {
   type RenderResult,
 } from "../../src";
 import { setWorkerCount } from "../../src/core/worker-pool";
-import { RenderAheadPlayer } from "../../playground/render-ahead";
+import { RenderAheadPlayer } from "../../src/player/render-ahead";
 
 const W = 1920;
 const H = 1080;
