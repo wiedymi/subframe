@@ -1,5 +1,123 @@
-import type { ClipMask } from "../tags/types";
+import type { ClipMask, ClipMaskBoxes } from "../tags/types";
 import { PathBuilder, computeTightBounds, PixelMode } from "text-shaper";
+
+// Cross-event clip mask reuse for frame-by-frame typeset scripts. The cache key
+// is exactly buildClipMask's semantic inputs; a hit returns the same ClipMask
+// object so apply.ts's WeakMap box cache also hits. Normal render consumers read
+// ClipMask fields only. Worker transfer code clones the clip object before
+// replacing bitmap buffers, so cached masks are not detached.
+let CLIP_MASK_CACHE_BYTES_LIMIT = 16 * 1024 * 1024;
+const CLIP_MASK_CACHE = new Map<string, { mask: ClipMask; bytes: number }>();
+let clipMaskCacheBytes = 0;
+const CLIP_MASK_BOX_CACHE_LIMIT = 4096;
+const CLIP_MASK_BOX_CACHE = new Map<
+  string,
+  { width: number; height: number; stride: number; boxes: ClipMaskBoxes }
+>();
+
+function clipMaskCacheKey(
+  path: string,
+  inverse: boolean,
+  screenScaleX: number,
+  screenScaleY: number,
+): string {
+  return `${inverse ? 1 : 0}|${screenScaleX}|${screenScaleY}|${path}`;
+}
+
+function trimClipMaskCache(): void {
+  while (clipMaskCacheBytes > CLIP_MASK_CACHE_BYTES_LIMIT && CLIP_MASK_CACHE.size > 0) {
+    const first = CLIP_MASK_CACHE.keys().next();
+    if (first.done) break;
+    const removed = CLIP_MASK_CACHE.get(first.value);
+    if (removed) clipMaskCacheBytes -= removed.bytes;
+    CLIP_MASK_CACHE.delete(first.value);
+  }
+}
+
+export function setClipMaskCacheLimit(bytes: number): void {
+  CLIP_MASK_CACHE_BYTES_LIMIT = Math.max(0, bytes);
+  trimClipMaskCache();
+}
+
+export function clearClipMaskCache(): void {
+  CLIP_MASK_CACHE.clear();
+  CLIP_MASK_BOX_CACHE.clear();
+  clipMaskCacheBytes = 0;
+}
+
+export function getClipMaskCacheStats(): {
+  bytes: number;
+  entries: number;
+  limitBytes: number;
+} {
+  return {
+    bytes: clipMaskCacheBytes,
+    entries: CLIP_MASK_CACHE.size,
+    limitBytes: CLIP_MASK_CACHE_BYTES_LIMIT,
+  };
+}
+
+function getCachedClipMaskBoxes(
+  key: string,
+  width: number,
+  height: number,
+  stride: number,
+): ClipMaskBoxes | null {
+  const cached = CLIP_MASK_BOX_CACHE.get(key);
+  if (!cached) return null;
+  if (
+    cached.width !== width ||
+    cached.height !== height ||
+    cached.stride !== stride
+  ) {
+    CLIP_MASK_BOX_CACHE.delete(key);
+    return null;
+  }
+  CLIP_MASK_BOX_CACHE.delete(key);
+  CLIP_MASK_BOX_CACHE.set(key, cached);
+  return cached.boxes;
+}
+
+function setCachedClipMaskBoxes(
+  key: string,
+  width: number,
+  height: number,
+  stride: number,
+  boxes: ClipMaskBoxes,
+): void {
+  if (CLIP_MASK_BOX_CACHE.has(key)) CLIP_MASK_BOX_CACHE.delete(key);
+  CLIP_MASK_BOX_CACHE.set(key, { width, height, stride, boxes });
+  while (CLIP_MASK_BOX_CACHE.size > CLIP_MASK_BOX_CACHE_LIMIT) {
+    const first = CLIP_MASK_BOX_CACHE.keys().next();
+    if (first.done) break;
+    CLIP_MASK_BOX_CACHE.delete(first.value);
+  }
+}
+
+function deriveTightClipMaskBoxes(
+  width: number,
+  height: number,
+): ClipMaskBoxes {
+  const hasNz = width > 0 && height > 0;
+  // text-shaper's rasterized clip bitmap is already cropped to the path's
+  // raster bounds. Treating that whole bitmap as the nonzero extent is a
+  // conservative box: if an edge row/column is actually zero, applyClip's exact
+  // per-pixel loop will still read alpha 0 and produce the same bytes. We skip
+  // the maximal-opaque rectangle on purpose; it is only a no-op fast path, and
+  // computing it cost more than it saved on frame-by-frame typesets.
+  return {
+    hasNz,
+    nzX0: 0,
+    nzY0: 0,
+    nzX1: hasNz ? width : 0,
+    nzY1: hasNz ? height : 0,
+    hasOpaque: false,
+    opX0: 0,
+    opY0: 0,
+    opX1: 0,
+    opY1: 0,
+  };
+}
 
 export function parseClipRect(
   path: string,
@@ -85,7 +203,7 @@ function addSplineSegment(
   p1: Point,
   p2: Point,
   p3: Point,
-  started: boolean,
+  contourStarted: boolean,
 ): boolean {
   const x01 = (p1.x - p0.x) / 3;
   const y01 = (p1.y - p0.y) / 3;
@@ -103,7 +221,8 @@ function addSplineSegment(
   const p2x = p2.x - x12;
   const p2y = p2.y - y12;
 
-  if (!started) commands[commands.length] = { type: "M", x: p0x, y: p0y };
+  if (!contourStarted)
+    commands[commands.length] = { type: "M", x: p0x, y: p0y };
   commands[commands.length] = {
     type: "C",
     x1: p1x,
@@ -122,21 +241,40 @@ export function parseDrawingPath(
 ): { commands: PathCommand[]; bounds: any } | null {
   const tokens = tokenizeDrawing(source);
   const commands: PathCommand[] = [];
+  const coord = (value: number) => (Math.round(value * 64) / 64) * scaleFactor;
   let penX = 0;
   let penY = 0;
-  let started = false;
+  let rootSeen = false;
+  let contourStarted = false;
+  let moveEmitted = false;
   let splineActive = false;
   let splineStart: Point[] = [];
   let splinePoints: Point[] = [];
 
-  const flushSpline = (close: boolean) => {
+  const moveTo = (x: number, y: number) => {
+    commands[commands.length] = { type: "M", x, y };
+    moveEmitted = true;
+  };
+
+  const closeContour = () => {
+    if (!contourStarted) return;
+    commands[commands.length] = { type: "Z" };
+    contourStarted = false;
+    moveEmitted = false;
+  };
+
+  // Match libass ass_drawing.c: `m` closes a started contour, `n` only moves
+  // the pen, and finalization closes any still-started contour. B-spline `c`
+  // closes the spline by repeating its first points, but contour closure still
+  // happens only through `m` or finalization.
+  const flushSpline = (closeSpline: boolean) => {
     if (!splineActive || splinePoints.length < 4) {
       splineActive = false;
       splinePoints = [];
       splineStart = [];
       return;
     }
-    if (close && splineStart.length === 3) {
+    if (closeSpline && splineStart.length === 3) {
       splinePoints[splinePoints.length] = splineStart[0]!;
       splinePoints[splinePoints.length] = splineStart[1]!;
       splinePoints[splinePoints.length] = splineStart[2]!;
@@ -146,12 +284,18 @@ export function parseDrawingPath(
     let p2 = splinePoints[2]!;
     for (let i = 3; i < splinePoints.length; i++) {
       const p3 = splinePoints[i]!;
-      started = addSplineSegment(commands, p0, p1, p2, p3, started);
+      contourStarted = addSplineSegment(
+        commands,
+        p0,
+        p1,
+        p2,
+        p3,
+        contourStarted,
+      );
       p0 = p1;
       p1 = p2;
       p2 = p3;
     }
-    if (close) commands[commands.length] = { type: "Z" };
     splineActive = false;
     splinePoints = [];
     splineStart = [];
@@ -175,52 +319,58 @@ export function parseDrawingPath(
     if (cmd === "m" || cmd === "n") {
       flushSpline(false);
       for (let vi = 0; vi + 1 < nums.length; vi += 2) {
-        const x = nums[vi]! * scaleFactor;
-        const y = nums[vi + 1]! * scaleFactor;
-        if (started && vi === 0 && cmd === "m")
-          commands[commands.length] = { type: "Z" };
-        commands[commands.length] = { type: "M", x, y };
+        const x = coord(nums[vi]!);
+        const y = coord(nums[vi + 1]!);
+        if (cmd === "m") {
+          rootSeen = true;
+          closeContour();
+          moveTo(x, y);
+        } else if (!rootSeen) {
+          return null;
+        } else if (!contourStarted) {
+          moveTo(x, y);
+        }
         penX = x;
         penY = y;
-        started = true;
       }
       continue;
     }
     if (cmd === "l") {
+      if (!rootSeen) continue;
       flushSpline(false);
       for (let vi = 0; vi + 1 < nums.length; vi += 2) {
-        const x = nums[vi]! * scaleFactor;
-        const y = nums[vi + 1]! * scaleFactor;
-        if (!started) {
-          commands[commands.length] = { type: "M", x: penX, y: penY };
-          started = true;
-        }
+        const x = coord(nums[vi]!);
+        const y = coord(nums[vi + 1]!);
+        if (!contourStarted && !moveEmitted) moveTo(penX, penY);
         commands[commands.length] = { type: "L", x, y };
+        contourStarted = true;
+        moveEmitted = true;
         penX = x;
         penY = y;
       }
       continue;
     }
     if (cmd === "b") {
+      if (!rootSeen) continue;
       flushSpline(false);
       for (let vi = 0; vi + 5 < nums.length; vi += 6) {
-        const x1 = nums[vi]! * scaleFactor;
-        const y1 = nums[vi + 1]! * scaleFactor;
-        const x2 = nums[vi + 2]! * scaleFactor;
-        const y2 = nums[vi + 3]! * scaleFactor;
-        const x = nums[vi + 4]! * scaleFactor;
-        const y = nums[vi + 5]! * scaleFactor;
-        if (!started) {
-          commands[commands.length] = { type: "M", x: penX, y: penY };
-          started = true;
-        }
+        const x1 = coord(nums[vi]!);
+        const y1 = coord(nums[vi + 1]!);
+        const x2 = coord(nums[vi + 2]!);
+        const y2 = coord(nums[vi + 3]!);
+        const x = coord(nums[vi + 4]!);
+        const y = coord(nums[vi + 5]!);
+        if (!contourStarted && !moveEmitted) moveTo(penX, penY);
         commands[commands.length] = { type: "C", x1, y1, x2, y2, x, y };
+        contourStarted = true;
+        moveEmitted = true;
         penX = x;
         penY = y;
       }
       continue;
     }
     if (cmd === "s") {
+      if (!rootSeen) continue;
       flushSpline(false);
       if (nums.length < 6) continue;
       splineActive = true;
@@ -230,8 +380,8 @@ export function parseDrawingPath(
       splinePoints[splinePoints.length] = startPoint;
       splineStart[splineStart.length] = startPoint;
       for (let vi = 0; vi + 1 < nums.length; vi += 2) {
-        const x = nums[vi]! * scaleFactor;
-        const y = nums[vi + 1]! * scaleFactor;
+        const x = coord(nums[vi]!);
+        const y = coord(nums[vi + 1]!);
         const pt = { x, y };
         splinePoints[splinePoints.length] = pt;
         if (splineStart.length < 3) splineStart[splineStart.length] = pt;
@@ -241,10 +391,11 @@ export function parseDrawingPath(
       continue;
     }
     if (cmd === "p") {
+      if (!rootSeen) continue;
       if (!splineActive || splinePoints.length < 3) continue;
       for (let vi = 0; vi + 1 < nums.length; vi += 2) {
-        const x = nums[vi]! * scaleFactor;
-        const y = nums[vi + 1]! * scaleFactor;
+        const x = coord(nums[vi]!);
+        const y = coord(nums[vi + 1]!);
         splinePoints[splinePoints.length] = { x, y };
         penX = x;
         penY = y;
@@ -258,11 +409,9 @@ export function parseDrawingPath(
   }
 
   flushSpline(false);
+  closeContour();
 
   if (commands.length === 0) return null;
-  const last = commands[commands.length - 1]!;
-  if (last.type !== "Z" && last.type !== "M")
-    commands[commands.length] = { type: "Z" };
 
   const pathObj = { commands, bounds: null as any };
   pathObj.bounds = computeTightBounds(pathObj as any);
@@ -276,6 +425,14 @@ export function buildClipMask(
   screenScaleX: number,
   screenScaleY: number,
 ): ClipMask | null {
+  const key = clipMaskCacheKey(path, inverse, screenScaleX, screenScaleY);
+  const cached = CLIP_MASK_CACHE.get(key);
+  if (cached) {
+    CLIP_MASK_CACHE.delete(key);
+    CLIP_MASK_CACHE.set(key, cached);
+    return cached.mask;
+  }
+
   const raw = path.trim();
   const s = raw.startsWith("(") && raw.endsWith(")") ? raw.slice(1, -1) : raw;
   let scale = 1;
@@ -299,14 +456,43 @@ export function buildClipMask(
   const raster = builder
     .rasterizeAuto({ padding: 0, pixelMode: PixelMode.Gray, flipY: false })
     .toRasterizedGlyph();
-  return {
+  let boxes = getCachedClipMaskBoxes(
+    key,
+    raster.bitmap.width,
+    raster.bitmap.rows,
+    raster.bitmap.pitch,
+  );
+  if (!boxes) {
+    boxes = deriveTightClipMaskBoxes(
+      raster.bitmap.width,
+      raster.bitmap.rows,
+    );
+    setCachedClipMaskBoxes(
+      key,
+      raster.bitmap.width,
+      raster.bitmap.rows,
+      raster.bitmap.pitch,
+      boxes,
+    );
+  }
+  const mask: ClipMask = {
     type: "mask",
     bitmap: raster.bitmap.buffer,
     width: raster.bitmap.width,
     height: raster.bitmap.rows,
     stride: raster.bitmap.pitch,
     originX: raster.bearingX,
-    originY: raster.bearingY,
+    // text-shaper reports bearingY as -(bitmap top): negate to get the
+    // screen-space y of the mask bitmap's top-left corner.
+    originY: -raster.bearingY,
     inverse,
+    boxes,
   };
+  const bytes = mask.bitmap.byteLength;
+  if (CLIP_MASK_CACHE_BYTES_LIMIT > 0 && bytes <= CLIP_MASK_CACHE_BYTES_LIMIT) {
+    CLIP_MASK_CACHE.set(key, { mask, bytes });
+    clipMaskCacheBytes += bytes;
+    trimClipMaskCache();
+  }
+  return mask;
 }

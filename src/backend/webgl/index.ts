@@ -1,5 +1,6 @@
 import type { BitmapLayer, FrameContext } from "../../core/data/types";
 import type { CompositorBackend, CompositorStats } from "../types";
+import { AtlasAllocator, type AtlasSlot } from "../atlas-allocator";
 import {
   FRAGMENT_SHADER_SOURCE_WEBGL1,
   FRAGMENT_SHADER_SOURCE_WEBGL2,
@@ -16,6 +17,10 @@ export type WebGLBackendOptions = {
 };
 
 type GLContext = WebGLRenderingContext | WebGL2RenderingContext;
+
+function isSharedBacked(view: Uint8Array): boolean {
+  return typeof SharedArrayBuffer !== "undefined" && view.buffer instanceof SharedArrayBuffer;
+}
 
 type GLResources = {
   gl: GLContext;
@@ -161,18 +166,15 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
   const { gl, isWebGL2 } = resources;
   const atlasSize = Math.max(256, options.atlasSize ?? 2048);
   const atlasPadding = Math.max(0, options.atlasPadding ?? 1);
-  const atlasPages: Array<{
+  const allocator = new AtlasAllocator({ pageSize: atlasSize, padding: atlasPadding });
+  const pageTextures: Array<{
     texture: WebGLTexture;
     width: number;
     height: number;
-    cursorX: number;
-    cursorY: number;
-    rowH: number;
   }> = [];
   const cache = new WeakMap<Uint8Array, {
-    pageIndex: number;
-    x: number;
-    y: number;
+    slot: AtlasSlot;
+    gen: number;
     width: number;
     height: number;
     stride: number;
@@ -181,6 +183,7 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
   let viewportH = options.canvas.height;
   let scratch: Uint8Array | null = null;
   let scratchSize = 0;
+  let frameCounter = 0;
   let lastStats: CompositorStats = { drawCalls: 0, uploads: 0, atlasPages: 0 };
 
   const ensureScratch = (size: number): Uint8Array => {
@@ -225,34 +228,14 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
         null,
       );
     }
-    return { texture, width, height, cursorX: 0, cursorY: 0, rowH: 0 };
+    return { texture, width, height };
   };
 
-  const allocate = (width: number, height: number) => {
-    const w = width;
-    const h = height;
-    for (let i = 0; i < atlasPages.length; i++) {
-      const page = atlasPages[i]!;
-      let x = page.cursorX;
-      let y = page.cursorY;
-      if (x + w > page.width) {
-        x = 0;
-        y = page.cursorY + page.rowH + atlasPadding;
-      }
-      if (y + h > page.height) continue;
-      page.cursorX = x + w + atlasPadding;
-      page.cursorY = y;
-      page.rowH = Math.max(page.rowH, h);
-      return { pageIndex: i, x, y };
+  const ensurePageTextures = (): void => {
+    for (let i = pageTextures.length; i < allocator.pages.length; i++) {
+      const pg = allocator.pages[i]!;
+      pageTextures.push(createPage(pg.width, pg.height));
     }
-    const pageWidth = Math.max(atlasSize, width);
-    const pageHeight = Math.max(atlasSize, height);
-    const page = createPage(pageWidth, pageHeight);
-    atlasPages.push(page);
-    page.cursorX = width + atlasPadding;
-    page.cursorY = 0;
-    page.rowH = height;
-    return { pageIndex: atlasPages.length - 1, x: 0, y: 0 };
   };
 
   const uploadMask = (
@@ -262,10 +245,34 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
     y: number,
   ): void => {
     const { width, height, stride, bitmap } = layer;
-    const page = atlasPages[pageIndex]!;
+    const page = pageTextures[pageIndex]!;
     gl.bindTexture(gl.TEXTURE_2D, page.texture);
+    // Some WebGL implementations reject SharedArrayBuffer-backed ArrayBufferViews
+    // for texSubImage2D. Keep SAB transport zero-copy through the core and copy
+    // only at this backend upload choke point when necessary.
+    const shared = isSharedBacked(bitmap);
     if (isWebGL2) {
       const gl2 = gl as WebGL2RenderingContext;
+      if (shared) {
+        const tight = ensureScratch(width * height);
+        for (let row = 0; row < height; row++) {
+          const srcRow = row * stride;
+          const dstRow = row * width;
+          tight.set(bitmap.subarray(srcRow, srcRow + width), dstRow);
+        }
+        gl2.texSubImage2D(
+          gl2.TEXTURE_2D,
+          0,
+          x,
+          y,
+          width,
+          height,
+          gl2.RED,
+          gl2.UNSIGNED_BYTE,
+          tight,
+        );
+        return;
+      }
       gl2.pixelStorei(gl2.UNPACK_ROW_LENGTH, stride);
       gl2.texSubImage2D(
         gl2.TEXTURE_2D,
@@ -283,7 +290,7 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
     }
 
     let data: Uint8Array = bitmap;
-    if (stride !== width) {
+    if (stride !== width || shared) {
       const tight = ensureScratch(width * height);
       for (let row = 0; row < height; row++) {
         const srcRow = row * stride;
@@ -322,6 +329,7 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
     let drawCalls = 0;
     let uploads = 0;
     let lastTexture: WebGLTexture | null = null;
+    const frameId = frameCounter++;
 
     for (let i = 0; i < layers.length; i++) {
       const layer = layers[i]!;
@@ -333,32 +341,36 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
       const h = layer.height;
       if (w <= 0 || h <= 0) continue;
 
-      let entry = cache.get(layer.bitmap);
-      if (!entry || entry.width !== w || entry.height !== h || entry.stride !== layer.stride) {
-        const placement = allocate(w, h);
-        entry = {
-          pageIndex: placement.pageIndex,
-          x: placement.x,
-          y: placement.y,
-          width: w,
-          height: h,
-          stride: layer.stride,
-        };
-        cache.set(layer.bitmap, entry);
-        uploadMask(layer, entry.pageIndex, entry.x, entry.y);
+      const cached = cache.get(layer.bitmap);
+      let slot: AtlasSlot;
+      if (
+        cached &&
+        cached.width === w &&
+        cached.height === h &&
+        cached.stride === layer.stride &&
+        !cached.slot.free &&
+        cached.slot.gen === cached.gen
+      ) {
+        slot = cached.slot;
+        allocator.touch(slot, frameId);
+      } else {
+        slot = allocator.allocate(w, h, frameId);
+        ensurePageTextures();
+        cache.set(layer.bitmap, { slot, gen: slot.gen, width: w, height: h, stride: layer.stride });
+        uploadMask(layer, slot.pageIndex, slot.x, slot.y);
         uploads++;
       }
-      const page = atlasPages[entry.pageIndex]!;
+      const page = pageTextures[slot.pageIndex]!;
       if (page.texture !== lastTexture) {
         gl.bindTexture(gl.TEXTURE_2D, page.texture);
         lastTexture = page.texture;
       }
       gl.uniform4f(
         resources.uniformUvRect,
-        entry.x / page.width,
-        entry.y / page.height,
-        entry.width / page.width,
-        entry.height / page.height,
+        slot.x / page.width,
+        slot.y / page.height,
+        w / page.width,
+        h / page.height,
       );
 
       const color = layer.color;
@@ -375,7 +387,7 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
       drawCalls++;
     }
 
-    lastStats = { drawCalls, uploads, atlasPages: atlasPages.length };
+    lastStats = { drawCalls, uploads, atlasPages: pageTextures.length };
   };
 
   const resize = (width: number, height: number, dpr?: number): void => {
@@ -390,8 +402,8 @@ export function createWebGLBackend(options: WebGLBackendOptions): CompositorBack
   };
 
   const dispose = (): void => {
-    for (let i = 0; i < atlasPages.length; i++) {
-      gl.deleteTexture(atlasPages[i]!.texture);
+    for (let i = 0; i < pageTextures.length; i++) {
+      gl.deleteTexture(pageTextures[i]!.texture);
     }
     gl.deleteBuffer(resources.buffer);
     gl.deleteProgram(resources.program);

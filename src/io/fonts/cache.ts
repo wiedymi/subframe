@@ -81,6 +81,24 @@ export function setFontResolver(resolver: FontResolver | null): void {
   fontResolver = resolver;
 }
 
+// Snapshot of registered font sources that survive structured clone across a
+// worker boundary. Live Font instances hold non-transferable native state and
+// are skipped; the worker re-resolves those by name via the font search paths.
+export function snapshotFontSources(): Array<{
+  name: string;
+  source: string | ArrayBuffer | Uint8Array;
+}> {
+  const out: Array<{ name: string; source: string | ArrayBuffer | Uint8Array }> = [];
+  const seen = new Set<string>();
+  for (const [name, source] of sourceMap) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (source instanceof Font) continue;
+    out[out.length] = { name, source };
+  }
+  return out;
+}
+
 async function resolveFontSource(fontName: string): Promise<FontSource | null> {
   const direct = sourceMap.get(fontName) ?? sourceMap.get(fontName.toLowerCase());
   if (direct) return direct;
@@ -153,11 +171,31 @@ async function loadFontForStyle(
     );
   }
 
-  const { resolveFontPath, resolveFontPathForCodepoint } = await import("./resolve");
-  const cp =
-    typeof sampleCodepoint === "number" && Number.isFinite(sampleCodepoint) && sampleCodepoint > 0
-      ? sampleCodepoint
-      : 0x41;
+  const { findFontFacesForFamily, resolveFontPath, resolveFontPathForCodepoint } =
+    await import("./resolve");
+  const hasSample =
+    typeof sampleCodepoint === "number" &&
+    Number.isFinite(sampleCodepoint) &&
+    sampleCodepoint > 0;
+
+  // Family-name match against fonts in the search paths (libass find_font
+  // parity). This must win over fc-match, which only sees system fonts.
+  const familyMatches = findFontFacesForFamily(fontName, bold, italic);
+  if (familyMatches.length > 0) {
+    if (!hasSample) return await getFont(familyMatches[0]!);
+    // libass checks glyph coverage across the family's faces; fall through to
+    // codepoint-based fallback only when no face covers the codepoint.
+    for (let i = 0; i < familyMatches.length; i++) {
+      try {
+        const font = await getFont(familyMatches[i]!);
+        if (font.glyphId(sampleCodepoint) !== 0) return font;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  const cp = hasSample ? sampleCodepoint : 0x41;
   if (bold || italic) {
     const styled = resolveFontPathForCodepoint(fontName, cp, bold, italic);
     if (styled) return await loadFontSource(styled);

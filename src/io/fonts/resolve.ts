@@ -1,6 +1,7 @@
 type NodeFs = {
   existsSync: (path: string) => boolean;
   readdirSync: (path: string) => string[];
+  readFileSync: (path: string) => Uint8Array;
 };
 type NodePath = {
   extname: (path: string) => string;
@@ -14,6 +15,7 @@ type NodeModules = { fs: NodeFs; path: NodePath; os: NodeOs };
 const FONT_EXTS = new Set([".ttf", ".otf", ".ttc", ".otc"]);
 let fontSearchPaths: string[] = [];
 let fontSearchIndex: Map<string, string> | null = null;
+let fontFaceIndex: FontFaceInfo[] | null = null;
 let nodeModules: NodeModules | null | undefined;
 let macPingFangPath: string | null | undefined;
 let macPingFangIndex: number | null | undefined;
@@ -173,6 +175,11 @@ export function setFontSearchPaths(paths: string[]): void {
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
   fontSearchIndex = null;
+  fontFaceIndex = null;
+}
+
+export function getFontSearchPaths(): string[] {
+  return fontSearchPaths.slice();
 }
 
 function buildFontSearchIndex(): Map<string, string> {
@@ -199,6 +206,211 @@ function buildFontSearchIndex(): Map<string, string> {
   }
   fontSearchIndex = index;
   return index;
+}
+
+// Per-face metadata mirroring libass ASS_FontInfo (ass_fontselect.c).
+type FontFaceInfo = {
+  path: string; // file path, with "#<index>" suffix for collection faces
+  families: string[]; // lowercased name IDs 1 + 16
+  fullnames: string[]; // lowercased name ID 4
+  postscriptName: string | null; // lowercased name ID 6
+  weight: number; // libass ass_face_get_weight mapping
+  bold: boolean; // OS/2 fsSelection bit 5 (or head.macStyle bit 0)
+  italic: boolean; // OS/2 fsSelection bit 0 (or head.macStyle bit 1)
+  postscriptOutlines: boolean; // CFF-flavored (libass check_postscript)
+};
+
+// libass ass_font.c ass_face_get_weight
+function faceWeightFromOs2(usWeightClass: number, boldFlag: boolean): number {
+  switch (usWeightClass) {
+    case 0:
+      return boldFlag ? 700 : 400;
+    case 1:
+      return 100;
+    case 2:
+      return 200;
+    case 3:
+      return 300;
+    case 4:
+      return 350;
+    case 5:
+      return 400;
+    case 6:
+      return 600;
+    case 7:
+      return 700;
+    case 8:
+      return 800;
+    case 9:
+      return 900;
+    default:
+      return usWeightClass;
+  }
+}
+
+function extractFaceInfo(font: Font, path: string): FontFaceInfo {
+  const meta = font as unknown as {
+    name?: { records?: Array<{ nameId: number; value: string }> } | null;
+    os2?: { usWeightClass?: number; fsSelection?: number } | null;
+    head?: { macStyle?: number } | null;
+    isCFF?: boolean;
+  };
+  const records = meta.name?.records ?? [];
+  const families: string[] = [];
+  const fullnames: string[] = [];
+  let postscriptName: string | null = null;
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i]!;
+    const id = rec.nameId;
+    if (id !== 1 && id !== 16 && id !== 4 && id !== 6) continue;
+    const value = rec.value.trim().toLowerCase();
+    if (!value) continue;
+    if (id === 1 || id === 16) {
+      if (!families.includes(value)) families[families.length] = value;
+    } else if (id === 4) {
+      if (!fullnames.includes(value)) fullnames[fullnames.length] = value;
+    } else if (postscriptName === null) {
+      postscriptName = value;
+    }
+  }
+  const os2 = meta.os2;
+  let bold = false;
+  let italic = false;
+  if (os2 && os2.fsSelection !== undefined) {
+    // libass fsSelection_to_style_flags: GDI ignores other bits.
+    bold = (os2.fsSelection & 0x20) !== 0;
+    italic = (os2.fsSelection & 0x01) !== 0;
+  } else {
+    const macStyle = meta.head?.macStyle ?? 0;
+    bold = (macStyle & 0x01) !== 0;
+    italic = (macStyle & 0x02) !== 0;
+  }
+  const weight = faceWeightFromOs2(os2?.usWeightClass ?? 0, bold);
+  return {
+    path,
+    families,
+    fullnames,
+    postscriptName,
+    weight,
+    bold,
+    italic,
+    postscriptOutlines: meta.isCFF === true,
+  };
+}
+
+function buildFontFaceIndex(): FontFaceInfo[] {
+  if (fontFaceIndex) return fontFaceIndex;
+  const { fs, path } = requireNodeModules();
+  const faces: FontFaceInfo[] = [];
+  for (let i = 0; i < fontSearchPaths.length; i++) {
+    const dir = fontSearchPaths[i]!;
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (let e = 0; e < entries.length; e++) {
+      const file = entries[e]!;
+      const ext = path.extname(file).toLowerCase();
+      if (!FONT_EXTS.has(ext)) continue;
+      const full = path.join(dir, file);
+      try {
+        const data = fs.readFileSync(full);
+        const buffer = data.buffer.slice(
+          data.byteOffset,
+          data.byteOffset + data.byteLength,
+        ) as ArrayBuffer;
+        const collection = Font.collection(buffer);
+        if (collection) {
+          for (let f = 0; f < collection.count; f++) {
+            try {
+              faces[faces.length] = extractFaceInfo(
+                collection.get(f),
+                `${full}#${f}`,
+              );
+            } catch {
+              continue;
+            }
+          }
+        } else {
+          faces[faces.length] = extractFaceInfo(Font.load(buffer), full);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  fontFaceIndex = faces;
+  return faces;
+}
+
+// libass ass_fontselect.c font_attributes_similarity (lower is better)
+function fontAttributesSimilarity(
+  face: FontFaceInfo,
+  reqWeight: number,
+  reqItalic: boolean,
+): number {
+  let score = 0;
+  if (reqItalic && !face.italic) score += 1;
+  else if (!reqItalic && face.italic) score += 4;
+  let weight = face.weight;
+  // Offset effective weight for faux-bold (only if face isn't flagged bold)
+  if (reqWeight > face.weight + 150 && !face.bold) weight += 120;
+  score += Math.floor((73 * Math.abs(weight - reqWeight)) / 256);
+  return score;
+}
+
+// libass ass_fontselect.c matches_full_or_postscript_name
+function matchesFullOrPostscriptName(
+  face: FontFaceInfo,
+  fullname: string,
+): boolean {
+  const matchesFullname = face.fullnames.includes(fullname);
+  const matchesPostscript = face.postscriptName === fullname;
+  if (matchesFullname === matchesPostscript) return matchesFullname;
+  return face.postscriptOutlines ? matchesPostscript : matchesFullname;
+}
+
+/**
+ * Match a requested family against fonts found in the search paths, mirroring
+ * libass find_font (ass_fontselect.c): family-name matches are ranked by
+ * font_attributes_similarity, full/PostScript-name matches rank best (0).
+ * Returns candidate paths best-first; empty when the family is unknown.
+ */
+export function findFontFacesForFamily(
+  family: string,
+  bold: boolean,
+  italic: boolean,
+): string[] {
+  if (fontSearchPaths.length === 0) return [];
+  let name = family.trim().toLowerCase();
+  if (name.startsWith("@")) name = name.slice(1); // vertical layout prefix
+  if (!name) return [];
+  const faces = buildFontFaceIndex();
+  if (faces.length === 0) return [];
+  const reqWeight = bold ? 700 : 400;
+  const matched: Array<{ face: FontFaceInfo; score: number; order: number }> =
+    [];
+  for (let i = 0; i < faces.length; i++) {
+    const face = faces[i]!;
+    let score: number;
+    if (face.families.includes(name)) {
+      score = fontAttributesSimilarity(face, reqWeight, italic);
+    } else if (matchesFullOrPostscriptName(face, name)) {
+      score = 0;
+    } else {
+      continue;
+    }
+    matched[matched.length] = { face, score, order: i };
+  }
+  if (matched.length === 0) return [];
+  matched.sort((a, b) => a.score - b.score || a.order - b.order);
+  const out: string[] = [];
+  for (let i = 0; i < matched.length; i++) {
+    out[out.length] = matched[i]!.face.path;
+  }
+  return out;
 }
 
 function findFontInDirs(fontName: string, dirs: string[]): string | null {

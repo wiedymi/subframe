@@ -17,6 +17,19 @@ export type ClipRect = {
   inverse: boolean;
 };
 
+export type ClipMaskBoxes = {
+  hasNz: boolean;
+  nzX0: number;
+  nzY0: number;
+  nzX1: number;
+  nzY1: number;
+  hasOpaque: boolean;
+  opX0: number;
+  opY0: number;
+  opX1: number;
+  opY1: number;
+};
+
 export type ClipMask = {
   type: "mask";
   bitmap: Uint8Array;
@@ -26,6 +39,7 @@ export type ClipMask = {
   originX: number;
   originY: number;
   inverse: boolean;
+  boxes?: ClipMaskBoxes;
 };
 
 export type ClipShape = ClipRect | ClipMask;

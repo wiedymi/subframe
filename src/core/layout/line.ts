@@ -90,8 +90,6 @@ export type Line = {
   descent: number;
   height: number;
   cacheable?: boolean;
-  minX?: number;
-  maxX?: number;
   segStartX?: number[];
   segWidth?: number[];
 };

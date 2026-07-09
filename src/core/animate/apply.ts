@@ -16,7 +16,7 @@ export function findAnimateEffects(effects: Effect[]): AnimateParams[] {
   return out;
 }
 
-function animateProgress(
+export function animateProgress(
   timeMs: number,
   ev: SubtitleEvent,
   anim: AnimateParams,
