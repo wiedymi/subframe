@@ -10,7 +10,7 @@ PlayResY: 200
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,2,10,10,10,1
+Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -25,6 +25,9 @@ async function renderLayerCount(text: string): Promise<number> {
   return result.layers.length;
 }
 
+// The style must carry nonzero Outline/Shadow (2,2 above) for the base render
+// to actually have outline/shadow layers; libass treats {\bord0\shad0} on a
+// 0,0 style as a no-op (ass_parse.c tag("bord")/tag("shad")).
 test("\\bord0 \\shad0 can disable outline/shadow", async () => {
   const base = await renderLayerCount("Hello");
   const disabled = await renderLayerCount("{\\\\bord0\\\\shad0}Hello");

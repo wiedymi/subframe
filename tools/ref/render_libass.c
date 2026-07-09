@@ -146,6 +146,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    // Register the fixture fonts dir on the library BEFORE renderer init /
+    // ass_set_fonts: libass scans it in ass_fontselect_init (triggered by
+    // ass_set_fonts). Passing the dir as ass_set_fonts' default_font is wrong;
+    // that parameter is a font FILE path used as the default face.
+    if (fonts_dir) ass_set_fonts_dir(ass_library, fonts_dir);
+
     ASS_Renderer *ass_renderer = ass_renderer_init(ass_library);
     if (!ass_renderer) {
         fprintf(stderr, "libass: failed to init renderer\n");
@@ -155,7 +161,9 @@ int main(int argc, char **argv)
 
     ass_set_storage_size(ass_renderer, width, height);
     ass_set_frame_size(ass_renderer, width, height);
-    ass_set_fonts(ass_renderer, fonts_dir, "sans-serif", ASS_FONTPROVIDER_AUTODETECT, NULL, 1);
+    // NULL default_font; system font provider (fontconfig/CoreText via
+    // AUTODETECT) stays enabled as fallback for families not in --fonts.
+    ass_set_fonts(ass_renderer, NULL, "sans-serif", ASS_FONTPROVIDER_AUTODETECT, NULL, 1);
 
     ASS_Track *track = ass_read_file(ass_library, ass_path, NULL);
     if (!track) {

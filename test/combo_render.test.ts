@@ -39,7 +39,14 @@ test("combo: move + fade + t + clip stays coherent", async () => {
   const parsed = parseASS(COMBO_ASS, { onError: "collect", strict: false, preserveOrder: true });
   expect(parsed.ok).toBe(true);
 
-  const early = await renderFrame(parsed.document, 0, 320, 200);
+  // At t=0 \fad(500,0) gives fade alpha 0: libass renders a fully transparent
+  // frame, so no visible layer may exist.
+  const faded = await renderFrame(parsed.document, 0, 320, 200);
+  expect(faded.layers.every((layer) => layer.color[3] === 0)).toBe(true);
+
+  // t=250 is mid-fade (factor 0.5): visible, partially transparent, and still
+  // left of the t=1500 position on the \move path.
+  const early = await renderFrame(parsed.document, 250, 320, 200);
   const mid = await renderFrame(parsed.document, 1500, 320, 200);
 
   expect(early.layers.length).toBeGreaterThan(0);

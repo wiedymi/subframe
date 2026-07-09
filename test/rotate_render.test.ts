@@ -52,6 +52,9 @@ test("\\frz rotates glyphs around origin", async () => {
   const w0 = b0.maxX - b0.minX;
   const w1 = b1.maxX - b1.minX;
 
-  expect(w1).toBeGreaterThan(w0 * 0.9);
+  // libass's own \frz45 ink ratio is 0.881 (w 59 -> 52), so demand > 0.8, and
+  // the strong rotation signal is vertical growth: ink height 19 -> 49 (>2x).
+  expect(w1).toBeGreaterThan(w0 * 0.8);
   expect(w1).not.toBeCloseTo(w0, 1);
+  expect(b1.maxY - b1.minY).toBeGreaterThan((b0.maxY - b0.minY) * 2);
 });

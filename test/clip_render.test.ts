@@ -29,14 +29,21 @@ Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\\bord0\\shad0\\clip(120,60,220,160)\\pos(160,100)\\frz45}Hello
+Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\\bord0\\shad0\\clip(140,80,220,160)\\pos(160,100)\\frz45}Hello
 `;
 
-function countInk(layers: { bitmap: Uint8Array }[]): number {
+// Rect clips narrow a layer via subarray + reduced width with unchanged stride
+// (same technique as libass render_glyph, ass_render.c:654-668), so ink must be
+// summed within the layer's width/height geometry, not over the raw buffer.
+function countInk(layers: { bitmap: Uint8Array; width: number; height: number; stride: number }[]): number {
   let sum = 0;
   for (let i = 0; i < layers.length; i++) {
-    const b = layers[i]!.bitmap;
-    for (let j = 0; j < b.length; j++) sum += b[j];
+    const l = layers[i]!;
+    const b = l.bitmap;
+    for (let y = 0; y < l.height; y++) {
+      const row = y * l.stride;
+      for (let x = 0; x < l.width; x++) sum += b[row + x]!;
+    }
   }
   return sum;
 }
@@ -113,10 +120,13 @@ test("last clip tag wins", async () => {
   expect(bothInk).not.toBe(clipInk);
 });
 
+// The clip rect (140,80,220,160) intersects the frz45-rotated text in screen
+// space (libass: ink 510255 -> 257040 at 4x scale); a rect that fully contains
+// the transformed bbox would remove zero pixels per libass.
 test("\\clip is applied after transforms", async () => {
   const clippedParsed = parseASS(CLIP_TRANSFORM_ASS, { onError: "collect", strict: false, preserveOrder: true });
   const noClipParsed = parseASS(
-    CLIP_TRANSFORM_ASS.replace("\\\\clip(120,60,220,160)", ""),
+    CLIP_TRANSFORM_ASS.replace("\\\\clip(140,80,220,160)", ""),
     { onError: "collect", strict: false, preserveOrder: true }
   );
   expect(clippedParsed.ok).toBe(true);

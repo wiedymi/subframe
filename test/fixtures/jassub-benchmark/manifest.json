@@ -1,0 +1,103 @@
+{
+  "source": {
+    "repo": "https://github.com/ThaUnknown/jassub",
+    "branch": "gh-pages",
+    "commit": "9160454483540ef64581b6c6d13fcd99451a6151",
+    "benchmarkPage": "https://jassub.pages.dev/"
+  },
+  "viewport": { "width": 1920, "height": 1080 },
+  "fontsDir": "test/fixtures/jassub-benchmark/fonts",
+  "renderers": {
+    "libass": { "cmd": ["/usr/bin/env", "DYLD_LIBRARY_PATH=refs/libass/libass/.libs", "tools/ref/render_libass"] },
+    "subframe": { "cmd": ["bun", "run", "tools/ref/render_subframe.ts"] }
+  },
+  "cases": [
+    {
+      "id": "jassub_variable",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/box.ass",
+      "timestampsMs": [0, 1000, 2000, 3000, 4000, 5000],
+      "upstreamId": "variable",
+      "delaySeconds": 0,
+      "fonts": [],
+      "video": {
+        "upstreamUrl": "/videos/vfr.mp4",
+        "localPath": "test/fixtures/jassub-benchmark/videos/vfr.mp4"
+      }
+    },
+    {
+      "id": "jassub_high",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/box.ass",
+      "timestampsMs": [0, 1000, 2000, 3000, 4000, 5000],
+      "upstreamId": "high",
+      "delaySeconds": 0,
+      "fonts": [],
+      "video": {
+        "upstreamUrl": "/videos/cfr.mp4",
+        "localPath": "test/fixtures/jassub-benchmark/videos/cfr.mp4"
+      }
+    },
+    {
+      "id": "jassub_simple",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/test.ass",
+      "timestampsMs": [18000, 19000, 20000, 21000, 22000, 23000],
+      "upstreamId": "simple",
+      "delaySeconds": 0,
+      "fonts": [],
+      "video": {
+        "upstreamUrl": "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        "localPath": null
+      }
+    },
+    {
+      "id": "jassub_fate",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/FGOBD.ass",
+      "timestampsMs": [39000, 40000, 41000, 42000, 43000, 44000],
+      "upstreamId": "fate",
+      "delaySeconds": -0.041,
+      "fonts": [
+        "test/fixtures/jassub-benchmark/fonts/Averia Sans Libre Light.ttf",
+        "test/fixtures/jassub-benchmark/fonts/Averia Serif Simple Light.ttf",
+        "test/fixtures/jassub-benchmark/fonts/Gramond.ttf"
+      ],
+      "video": {
+        "upstreamUrl": "https://v.animethemes.moe/FateGrandOrderBabylonia-OP1v2-NCBD1080.webm",
+        "localPath": null
+      }
+    },
+    {
+      "id": "jassub_beastars",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/beastars.ass",
+      "timestampsMs": [246380, 247380, 248380, 249380, 250380, 251380],
+      "upstreamId": "beastars",
+      "delaySeconds": 246.38,
+      "fonts": [
+        "test/fixtures/jassub-benchmark/fonts/architext.regular.ttf",
+        "test/fixtures/jassub-benchmark/fonts/FRABK.TTF",
+        "test/fixtures/jassub-benchmark/fonts/allison-script.regular.otf",
+        "test/fixtures/jassub-benchmark/fonts/Lato-Regular.ttf",
+        "test/fixtures/jassub-benchmark/fonts/chawp.otf",
+        "test/fixtures/jassub-benchmark/fonts/arial.ttf",
+        "test/fixtures/jassub-benchmark/fonts/SlatePro-Medium.otf"
+      ],
+      "video": {
+        "upstreamUrl": "/videos/Beastars.mp4",
+        "localPath": "test/fixtures/jassub-benchmark/videos/Beastars.mp4"
+      }
+    },
+    {
+      "id": "jassub_kusriya",
+      "ass": "test/fixtures/jassub-benchmark/subtitles/Kusriya S2 OP1v3.ass",
+      "timestampsMs": [35000, 36000, 37000, 38000, 39000, 40000],
+      "upstreamId": "kusriya",
+      "delaySeconds": 0,
+      "fonts": [
+        "test/fixtures/jassub-benchmark/fonts/FOT-TsukuCOldMinPr6NR.OTF",
+        "test/fixtures/jassub-benchmark/fonts/RoughFlowers.TTF"
+      ],
+      "video": {
+        "upstreamUrl": "https://v.animethemes.moe/KusuriyaNoHitorigotoS2-OP1-NCBD1080.webm",
+        "localPath": null
+      }
+    }
+  ]
+}

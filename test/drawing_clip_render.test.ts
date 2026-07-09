@@ -17,11 +17,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,%TEXT%
 `;
 
-function ink(layers: { bitmap: Uint8Array }[]): number {
+// Sum coverage inside each layer's logical window: bitmaps may be subarray
+// views into larger buffers (rect clips crop without copying), so raw
+// buffer length is not the layer extent.
+function ink(
+  layers: { bitmap: Uint8Array; width: number; height: number; stride: number }[],
+): number {
   let sum = 0;
   for (let i = 0; i < layers.length; i++) {
-    const b = layers[i]!.bitmap;
-    for (let j = 0; j < b.length; j++) sum += b[j];
+    const l = layers[i]!;
+    for (let y = 0; y < l.height; y++) {
+      const row = y * l.stride;
+      for (let x = 0; x < l.width; x++) sum += l.bitmap[row + x]!;
+    }
   }
   return sum;
 }

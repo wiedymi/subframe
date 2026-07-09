@@ -39,7 +39,7 @@ function boundsFromLayers(layers: { originX: number; originY: number; width: num
   return { minX, maxX, minY, maxY };
 }
 
-test("\\fax shears and increases horizontal bounds", async () => {
+test("\\fax shears and displaces horizontal bounds", async () => {
   const plain = BASE.replace("%TEXT%", "{\\\\bord0\\\\shad0}Shear");
   const sheared = BASE.replace("%TEXT%", "{\\\\bord0\\\\shad0\\\\fax0.5}Shear");
 
@@ -56,7 +56,13 @@ test("\\fax shears and increases horizontal bounds", async () => {
   const w0 = b0.maxX - b0.minX;
   const w1 = b1.maxX - b1.minX;
 
-  expect(w1).toBeGreaterThan(w0 * 1.05);
+  // libass shears around the ascent line (calc_transform_matrix,
+  // ass_render.c:1518-1519 adds asc*fax to the x shift), so \fax mostly
+  // TRANSLATES the ink rightward: libass ink moves x [127,193] -> [132,199]
+  // with width growing only ~1.5%. Assert displacement, not widening.
+  expect(b1.maxX).toBeGreaterThan(b0.maxX);
+  expect(b1.minX).toBeGreaterThan(b0.minX);
+  expect(w1).toBeGreaterThanOrEqual(w0);
 });
 
 test("\\fay shears and increases vertical bounds", async () => {

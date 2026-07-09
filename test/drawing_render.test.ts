@@ -53,5 +53,8 @@ Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\\bord0\\shad0\\pos(60,120)\\
   const shiftLine = shiftTrace.trace.events[0]?.lines[0];
   expect(baseLine).toBeDefined();
   expect(shiftLine).toBeDefined();
-  expect(shiftLine!.ascent).toBeGreaterThan(baseLine!.ascent);
+  // libass ass_render.c:1370-1371: desc = 64 * pbo; asc = bbox_height - desc.
+  // A positive \pbo DECREASES the drawing's ascent and increases its descent.
+  expect(shiftLine!.ascent).toBeLessThan(baseLine!.ascent);
+  expect(shiftLine!.descent).toBeGreaterThan(baseLine!.descent);
 });

@@ -47,6 +47,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\bord0\shad0\t(0,1000,\alpha&HFF&)}A
 `;
 
+const SHADOW_AXIS_ASS = String.raw`[Script Info]
+Title: animate-shadow-axis
+ScriptType: v4.00+
+PlayResX: 320
+PlayResY: 200
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\pos(160,100)\bord0\1a&H00&\3a&HFF&\4a&H00&\shad0\t(0,1,\xshad12\yshad0)}A
+`;
+
 const ROTATE_ASS = String.raw`[Script Info]
 Title: animate-rotate
 ScriptType: v4.00+
@@ -143,6 +158,24 @@ test("\\t animates alpha over time", async () => {
   const lateAlpha = late.layers.reduce((max, layer) => Math.max(max, layer.color[3]), 0);
 
   expect(earlyAlpha).toBeGreaterThan(lateAlpha);
+});
+
+test("\\t animated \\xshad persists as an explicit axis shadow after t2", async () => {
+  const parsed = parseASS(SHADOW_AXIS_ASS, { onError: "collect", strict: false, preserveOrder: true });
+  expect(parsed.ok).toBe(true);
+
+  const late = await renderFrame(parsed.document, 1000, 320, 200);
+
+  const shadowLayers = late.layers.filter(
+    (layer) =>
+      layer.color[0] === 0 &&
+      layer.color[1] === 0 &&
+      layer.color[2] === 0 &&
+      layer.color[3] > 0,
+  );
+
+  expect(shadowLayers.length).toBeGreaterThan(0);
+  expect(Math.min(...shadowLayers.map((layer) => layer.originX))).toBeGreaterThan(155);
 });
 
 test("\\t animates rotate using \\fr alias", async () => {

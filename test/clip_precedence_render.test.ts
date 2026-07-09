@@ -27,13 +27,15 @@ function ink(layers: { bitmap: Uint8Array }[]): number {
 }
 
 test("last clip (rect vs vector) wins", async () => {
+  // The vector clip covers a narrower box than the rect clip so the two
+  // produce different ink; the render must honor the last clip (vector).
   const rectFirst = BASE.replace(
     "%TEXT%",
-    "{\\\\pos(160,100)\\\\clip(100,60,220,140)\\\\clip(m 100 60 l 220 60 l 220 140 l 100 140)}Hello"
+    "{\\\\pos(160,100)\\\\clip(100,60,220,140)\\\\clip(m 100 60 l 160 60 l 160 140 l 100 140)}Hello"
   );
   const vectorOnly = BASE.replace(
     "%TEXT%",
-    "{\\\\pos(160,100)\\\\clip(m 100 60 l 220 60 l 220 140 l 100 140)}Hello"
+    "{\\\\pos(160,100)\\\\clip(m 100 60 l 160 60 l 160 140 l 100 140)}Hello"
   );
   const rectOnly = BASE.replace(
     "%TEXT%",

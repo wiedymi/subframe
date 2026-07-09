@@ -26,7 +26,10 @@ test("trace captures filter parameters and padding", async () => {
   expect(event).toBeDefined();
   expect(event!.layers.length).toBeGreaterThan(0);
 
-  const expectedPad = 4;
+  // padding is bePadding(edgeBlur), the exact port of libass ass_be_padding
+  // (ass_render.c:2837-2845): be<=3 -> be, be<=7 -> 4, else 5. For \be1 that
+  // is 1. \blur/\bord/\shad do not feed this composite-border padding.
+  const expectedPad = 1;
   for (const layer of event!.layers) {
     expect(layer.outline).toBe(3);
     expect(layer.shadow).toBe(4);

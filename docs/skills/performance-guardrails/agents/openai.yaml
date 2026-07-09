@@ -1,0 +1,4 @@
+interface:
+  display_name: "Performance Guardrails"
+  short_description: "Apply TS/JS runtime perf guardrails and benchmarks."
+  default_prompt: "Use this skill to implement or review hot-path TS/JS rendering code with strict performance guardrails, benchmark discipline, and regression enforcement."

@@ -73,8 +73,15 @@ test("\\fad does not block \\move", async () => {
   const parsed = parseASS(FADE_MOVE_ASS, { onError: "collect", strict: false, preserveOrder: true });
   expect(parsed.ok).toBe(true);
 
-  const early = await renderFrame(parsed.document, 0, 320, 200);
+  // Sample after the 500ms fade-in: at t=0 fade alpha is 0 and libass renders
+  // zero visible pixels, so there would be nothing to measure. At t=600 the
+  // text is visible near the start of the \move path (libass ink minX 43);
+  // by t=2500 it has moved right (libass ink minX 111).
+  const early = await renderFrame(parsed.document, 600, 320, 200);
   const mid = await renderFrame(parsed.document, 2500, 320, 200);
+
+  expect(early.layers.length).toBeGreaterThan(0);
+  expect(mid.layers.length).toBeGreaterThan(0);
 
   const minX = (layers: { originX: number }[]) => {
     let min = Infinity;
