@@ -27,3 +27,15 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Bench/parity generated artifacts
+tools/gpu-headless/results/
+tools/gpu-headless/profiles/
+tools/parity/results/
+tools/parity/cache/
+*.cpuprofile
+
+# Local skill clone (canonical copy lives in docs/skills/)
+performance-guardrails-skill/
+# Scratch diff-tool output
+diff.json
