@@ -22,75 +22,100 @@ bun add subframe subforge
 
 Fonts are your responsibility: register the font files your subtitles use (see below). Subframe ships no fonts.
 
-## Quick start (browser, WebGPU)
+## Quick start (browser)
 
 ```ts
 import { parseASS } from "subforge/ass";
-import {
-  createWebGPUBackend,
-  registerFontSource,
-  attachDocument,
-  renderFrame,
-  releaseRenderResult,
-  setWorkerSource,
-} from "subframe";
+import { Subframe } from "subframe";
 
-// 1. Fonts: register every family the script uses (ArrayBuffer or URL string).
-registerFontSource("Lato", await (await fetch("/fonts/Lato-Regular.ttf")).arrayBuffer());
-
-// 2. Workers (recommended): point the pool at the bundled worker entry.
-//    The package build emits dist/worker-entry.js next to dist/index.js —
-//    serve it and pass its URL. Without this, rendering stays single-threaded.
-setWorkerSource("/node_modules/subframe/dist/worker-entry.js");
-
-// 3. Backend: composites layers into your canvas. GPU filters default ON.
 const canvas = document.querySelector("canvas")!;
-const backend = await createWebGPUBackend({ canvas });
 
-// 4. Document: parse once, attach once. attachDocument warms fonts, workers,
-//    and the frame pipeline in the background so the first frames are cheap.
 const doc = parseASS(await (await fetch("/subs.ass")).text(), {
   onError: "collect",
 }).document;
-void attachDocument(doc, canvas.width, canvas.height);
 
-// 5. Render loop: feed media time (ms), composite, release when done showing.
-let shown: Awaited<ReturnType<typeof renderFrame>> | null = null;
-function onFrame(mediaTimeMs: number) {
-  void renderFrame(doc, mediaTimeMs, canvas.width, canvas.height).then((result) => {
-    backend.render(result.layers, result.frame);
-    if (shown && shown !== result) releaseRenderResult(shown);
-    shown = result;
-  });
-}
-// Drive onFrame from requestVideoFrameCallback / your player clock.
+const sf = new Subframe({
+  canvas,
+  backend: "auto", // WebGPU -> WebGL -> Canvas2D CPU fallback
+  fonts: [
+    await (await fetch("/fonts/Lato-Regular.ttf")).arrayBuffer(),
+  ],
+});
+
+await sf.ready;
+sf.resize(canvas.width, canvas.height);
+sf.setDocument(doc);
+
+// Manual clock: render and composite one subtitle frame.
+await sf.render(video.currentTime * 1000);
+
+// Or let Subframe drive requestVideoFrameCallback-synced playback.
+sf.attachVideo(video);
 ```
 
 Notes:
 
-- `renderFrame` is safe to call at display rate. Duplicate subtitle frames (static content sampled faster than it changes) are served by reference in ~0.1 ms; unique frames are pre-rendered on the worker pool ahead of their deadline.
-- `releaseRenderResult(result)` is optional but recommended for players that buffer frames: it returns the frame's transport buffers to the worker pool. Never call it while the frame can still be composited.
-- Seeking needs no special handling — jump the time you pass to `renderFrame`; the pipeline re-primes itself.
+- `Subframe` starts async initialization in the constructor; `ready`, `render()`, and `frame()` queue behind it.
+- Workers default on. Package builds embed an inline module worker; strict CSP pages can pass `workerUrl` to a separately served `dist/worker-entry.js`, or `workers: false` to stay single-threaded.
+- Only one live `Subframe` instance is supported per page for now because the renderer core owns module-global caches and worker-pool state.
+- Seeking needs no special handling — jump the time you pass to `render()` or the attached video; the pipeline re-primes itself.
 
 ## Quick start (Bun / offline)
 
 ```ts
 import { parseASS } from "subforge/ass";
-import { renderFrame, registerFontSource } from "subframe";
+import { Subframe } from "subframe";
 
-registerFontSource("Lato", await Bun.file("fonts/Lato-Regular.ttf").arrayBuffer());
 const doc = parseASS(await Bun.file("episode.ass").text(), { onError: "collect" }).document;
 
-const { layers } = await renderFrame(doc, 90_000, 1920, 1080);
+const sf = new Subframe({
+  fonts: [await Bun.file("fonts/Lato-Regular.ttf").arrayBuffer()],
+});
+await sf.ready;
+sf.resize(1920, 1080);
+sf.setDocument(doc);
+
+const { layers, release } = await sf.frame(90_000);
 // Each layer is a grayscale bitmap + premultiply color + placement — composite
 // however you like (Canvas2D, PNG encode, an encoder pipeline, ...):
 for (const layer of layers) {
   // layer.bitmap (Uint8Array), layer.width / height / stride,
   // layer.originX / originY (1/64 px fixed point), layer.color, layer.z
 }
+release();
+sf.dispose();
 ```
 
-The same worker pool runs under Bun (`setWorkerSource` with the worker entry path) for realtime server-side rendering.
+The same worker pool runs under Bun for realtime server-side rendering. Use `workers: false` for deterministic single-threaded scripts.
+
+## Fonts
+
+`new Subframe({ fonts })` accepts an array of font bytes, `Blob`/`File` objects, or URLs. Each file is parsed once and registered under its own names from the font name table: family, typographic family, full name, and PostScript name. Name matching remains case-insensitive.
+
+```ts
+const sf = new Subframe({
+  canvas,
+  fonts: [
+    await (await fetch("/fonts/Lato-Regular.ttf")).arrayBuffer(),
+    "/fonts/Allison-Regular.otf",
+  ],
+  fontResolver: async (name) => {
+    const res = await fetch(`/fallback-fonts/${encodeURIComponent(name)}.ttf`);
+    return res.ok ? await res.arrayBuffer() : null;
+  },
+});
+```
+
+Font resolution priority is:
+
+1. Chromium Local Font Access API, when available and permitted.
+2. Embedded ASS `[Fonts]` data on the active document.
+3. The `fonts` array passed to `Subframe`.
+4. `fontResolver`.
+
+Local Font Access requires Chromium support and usually a user gesture/permission grant; denied or unavailable access silently falls through to the next source. Embedded ASS fonts are decoded from the script's UUEncoded `[Fonts]` section and registered by the decoded font's own names, not by the embedded filename.
+
+The old name-keyed object form is accepted as deprecated compatibility before publish, but new integrations should use the array form.
 
 ## Backends
 
@@ -108,9 +133,9 @@ Everything defaults to the fast path; these exist for A/B tests and constrained 
 
 | Control | Default | Purpose |
 |---|---|---|
-| `setWorkerSource(url)` | unset | Enables the worker pool (parallel rendering, prewarm, frame pipeline). |
+| `new Subframe({ workerUrl })` / `setWorkerSource(url)` | inline worker / unset | Worker bootstrap. `workerUrl` is the CSP escape hatch; low-level callers can still use `setWorkerSource`. |
 | `setWorkerPool(false)` / `setWorkerCount(n)` | on / auto | Disable or size the pool. |
-| `attachDocument(doc, w, h)` | — | Optional explicit warmup at load; otherwise warmup self-triggers on playback. |
+| `sf.setDocument(doc)` / `attachDocument(doc, w, h)` | — | Public facade attach/warmup, or explicit low-level warmup. |
 | `setMemoryBudget(bytes)` | ~120 MB ceilings | Scales all byte-bounded caches proportionally. |
 | `setFrameHybrid(false)` / `setFrameScatter(false)` | on | A/B switches for the frame pipeline engines. |
 | `releaseRenderResult(result)` | — | Returns a consumed frame's buffers to the pool (buffering players). |
@@ -129,7 +154,23 @@ Local demo UI with a live perf panel (display cadence, pipeline stats, memory, G
 bun run build
 ```
 
-Emits `dist/index.js` and `dist/worker-entry.js` (ESM, browser target).
+Generates the inline worker string, then emits `dist/index.js` and `dist/worker-entry.js` (ESM, browser target). The inline worker increases the main bundle size; pass `workerUrl` if your deployment prefers serving `dist/worker-entry.js` separately or blocks Blob workers with CSP.
+
+## Advanced / core API
+
+The facade is a thin owner for the existing core pieces. Advanced integrations can still compose them directly:
+
+```ts
+import {
+  createWebGPUBackend,
+  renderFrame,
+  releaseRenderResult,
+  registerFontSource,
+  setWorkerSource,
+} from "subframe";
+```
+
+Use the core API when you need custom scheduling, tracing, or backend ownership. If you buffer returned `RenderResult`s, call `releaseRenderResult(result)` only after the last presentation of that frame.
 
 ## Verification tooling
 
