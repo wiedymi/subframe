@@ -31,6 +31,10 @@
             <input type="checkbox" id="render-mode">
             <span>Render at PlayRes</span>
           </label>
+          <label class="toggle" title="GPU filter path (WebGPU only). On by default when WebGPU initializes; uncheck to opt out.">
+            <input type="checkbox" id="gpu-filters" checked>
+            <span>GPU filters (WebGPU)</span>
+          </label>
           <label class="select">
             <span>Backend</span>
             <select id="backend-select">
@@ -112,6 +116,18 @@
           <h2>Performance</h2>
           <div id="perf-stats">
             <div class="status-row">
+              <span class="label">Display:</span>
+              <span id="perf-display" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Pacing:</span>
+              <span id="perf-pacing" class="value">-</span>
+            </div>
+            <div class="status-row">
+              <span class="label">Pipeline:</span>
+              <span id="perf-pipeline" class="value">-</span>
+            </div>
+            <div class="status-row">
               <span class="label">Render:</span>
               <span id="perf-render" class="value">-</span>
             </div>
@@ -139,6 +155,7 @@
               <span class="label">Cache:</span>
               <span id="perf-cache" class="value">-</span>
             </div>
+            <div id="perf-note" class="value" style="display:none;margin-top:6px;color:#e3b341"></div>
           </div>
           <div class="perf-graphs">
             <div class="graph">
@@ -155,6 +172,23 @@
         <section class="fonts-section">
           <h2>Loaded Fonts</h2>
           <ul id="font-list"></ul>
+        </section>
+
+        <section class="selftest-section" id="gpu-selftest-section" style="display:none">
+          <h2>GPU Blur Self-Test</h2>
+          <p class="hint">Bit-exact check of the WGSL integer blur against the CPU libass blur, plus a timing comparison. Results appear in the Log.</p>
+          <button id="gpu-selftest-btn" title="Run WGSL vs CPU blur bit-exactness + timing">Run GPU blur self-test</button>
+        </section>
+
+        <section class="selftest-section" id="backend-compare-section">
+          <h2>Backend Compare Self-Test</h2>
+          <p class="hint">Renders N frames of the loaded subtitles through the core once, composites the same layers with the CPU reference and the selected GPU backend (read back), and reports PASS/FAIL + max pixel diff per frame. Acceptance test for the GPU compositor. Load a subtitle first; results appear in the Log.</p>
+          <button id="backend-compare-btn" title="Compare GPU backend output against the CPU reference compositor">Run backend compare self-test</button>
+        </section>
+        <section class="selftest-section" id="gpu-fullframe-section">
+          <h2>GPU Filter Full-Frame Test (OFF==ON)</h2>
+          <p class="hint">Renders the loaded subtitle @901000ms and a built-in \t\frz rotation case through a filter-enabled WebGPU backend twice -- GPU filter provider OFF (CPU blur/outline/shadow) then ON (GPU-produced, no readback) -- reads back both canvases and byte-compares (tolerance 0). Reports PASS/FAIL, per-frame ms each way, and GPU-routed/total layers. WebGPU only; results in the Log.</p>
+          <button id="gpu-fullframe-btn" title="Verify GPU-produced filters match the CPU path byte-for-byte" style="display:none">Run GPU filter full-frame test</button>
         </section>
       </div>
     </main>
