@@ -9,12 +9,15 @@
         "text-shaper": "0.1.24",
       },
       "devDependencies": {
+        "@webgpu/types": "^0.1.71",
         "jassub": "^2.5.6",
         "pngjs": "^7.0.0",
       },
     },
   },
   "packages": {
+    "@webgpu/types": ["@webgpu/types@0.1.71", "", {}, "sha512-mMy8/ODcKhab808co15eW+yN+HgXoQxRQHTiBV9Mrvl1r0ufnid7YOcI+gi4eUWSWl9ezD6TW2KXccrL8HCh2A=="],
+
     "abslink": ["abslink@1.2.2", "", {}, "sha512-HCOItvzORPjMzddCmEpbH8+W1VM3yjH+CR7DLtxlxFKX/jz5twJbm7KLfblO7eKLnXINLah8Hk2ZAJqxXeSkOg=="],
 
     "jassub": ["jassub@2.5.6", "", { "dependencies": { "abslink": "^1.2.2", "lfa-ponyfill": "^1.1.0", "rvfc-polyfill": "^1.0.8", "throughput": "^1.0.2" } }, "sha512-jsbEPVR+JvcOcGa8PbyVvHmFol+rQtAfty7JDp1WWrS3GEfThitjI5sXT0VLfG6/BLuyIuv1+2qykWdWyLkpQw=="],
