@@ -11,6 +11,7 @@ import {
   createWebGLBackend,
   createWebGPUBackend,
   getMemoryStats,
+  setWorkerPool,
   setWorkerSource,
   getFramePipelineStats,
   resetFramePipeline,
@@ -151,6 +152,7 @@ let player: RenderAheadPlayer<SubframeFrame> | null = null;
 let playbackSubframe: Subframe | null = null;
 let playbackSubframeDoc: SubtitleDocument | null = null;
 let workersRequested = true;
+let workerBootstrapPromise: Promise<void> = Promise.resolve();
 // Backend resolved ONCE at play start so present() is synchronous (no per-frame
 // `await ensureWebGPUBackend()`); null => CPU composite path.
 let activeBackendRef: CompositorBackend | null = null;
@@ -955,8 +957,9 @@ function updateGpuFilterNote(s: RenderAheadStats, result: { layers: BitmapLayer[
 function ensurePlaybackSubframe(): Subframe {
   if (playbackSubframe) return playbackSubframe;
   playbackSubframe = new Subframe({
+    // Package and static-playground builds inject the inline worker. Source-mode
+    // development resolves the sibling worker served by playground/server.ts.
     workers: workersRequested,
-    workerUrl: workersRequested ? "/worker-entry.js" : undefined,
   });
   if (state.document) {
     playbackSubframe.setDocument(state.document);
@@ -997,6 +1000,7 @@ function ensurePlayer(): RenderAheadPlayer<SubframeFrame> {
 // fresh uniform cadence, and launches the producer + display loops.
 async function startTimerPlayback(): Promise<void> {
   if (!state.document) return;
+  await workerBootstrapPromise;
   activeBackendRef = await resolveActiveBackend();
   const sf = ensurePlaybackSubframe();
   const activeCanvas = getActiveCanvas();
@@ -1679,22 +1683,38 @@ function init() {
   // byte-bounded end-to-end (beastars steady heap ~106MB with 8 workers), and
   // the boundary/ring machinery that carries realtime playback needs the pool.
   workersRequested = new URLSearchParams(location.search).get("workers") !== "0";
+  // Source-mode and static playground bundles do not contain Subframe's
+  // package-only inline worker. Keep the low-level pool off until the deployed
+  // standalone module has been proven to be JavaScript; Pages may otherwise
+  // return index.html with status 200 for a missing asset.
+  setWorkerPool(false);
   if (workersRequested) {
-    void (async () => {
+    workerBootstrapPromise = (async () => {
       try {
-        const res = await fetch("/worker-entry.js", { method: "HEAD" });
-        if (res.ok) {
-          setWorkerSource("/worker-entry.js");
-          log("Worker pool source: /worker-entry.js");
-        } else {
-          log("Worker pool: /worker-entry.js not served; inline prewarm only", "warn");
+        const workerUrl = "/worker-entry.js";
+        const res = await fetch(workerUrl, {
+          method: "HEAD",
+          cache: "no-store",
+        });
+        const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
+        if (!res.ok || !contentType.includes("javascript")) {
+          throw new Error(
+            `${res.status} ${contentType || "missing content-type"}`,
+          );
         }
-      } catch {
-        log("Worker pool: /worker-entry.js probe failed; inline prewarm only", "warn");
+        setWorkerSource(workerUrl);
+        setWorkerPool(true);
+        log(`Low-level worker pool source: ${workerUrl}; Subframe uses inline workers`);
+      } catch (error) {
+        setWorkerPool(false);
+        log(
+          `Low-level worker pool unavailable (${error}); Subframe inline workers remain enabled`,
+          "warn",
+        );
       }
     })();
   } else {
-    log("Worker pool off (?workers=0); inline prewarm only");
+    log("Worker pools off (?workers=0); using single-thread rendering");
   }
   setFontResolver(async (fontName) => {
     const index = await buildLocalFontIndex();

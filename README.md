@@ -150,6 +150,18 @@ bun run playground
 
 Local demo UI with a live perf panel (display cadence, pipeline stats, memory, GPU counters), backend switcher, and GPU self-tests. Workers and GPU filters are on by default (`?workers=0` opts out).
 
+For static hosting (including Cloudflare Pages), build the complete playground
+surface rather than bundling `playground/index.html` directly:
+
+```sh
+bun run build:playground
+```
+
+Publish `dist-pages`. The build injects Subframe's default inline worker and
+also emits `worker-entry.js` for the low-level functional API. If the standalone
+asset is missing or served with the wrong MIME type, the low-level pool falls
+back to the main thread while the `Subframe` facade keeps using inline workers.
+
 ## Build
 
 ```sh

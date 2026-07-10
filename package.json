@@ -37,6 +37,7 @@
   },
   "scripts": {
     "build": "bun run tools/build.ts && tsc -p tsconfig.build.json && bun run tools/postprocess-dts.ts",
+    "build:playground": "bun run tools/build-playground.ts",
     "typecheck": "tsc -p tsconfig.check.json --noEmit",
     "test": "bun test test/*.test.ts",
     "prepack": "bun run build",
