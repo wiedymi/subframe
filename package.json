@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "subforge": "0.1.3",
-    "text-shaper": "0.1.24"
+    "text-shaper": "0.1.25"
   },
   "scripts": {
     "build": "bun run tools/build.ts && tsc -p tsconfig.build.json && bun run tools/postprocess-dts.ts",
