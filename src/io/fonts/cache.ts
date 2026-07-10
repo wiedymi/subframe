@@ -80,7 +80,37 @@ export function registerFontSource(fontName: string, source: FontSource): void {
   if (!fontName) return;
   sourceMap.set(fontName, source);
   sourceMap.set(fontName.toLowerCase(), source);
-  cache.delete(fontName);
+  // Style and codepoint cache keys include the font name as a component and
+  // cannot be invalidated by deleting the raw name alone. Font registration is
+  // a cold-path operation, so clear the small promise cache deterministically.
+  cache.clear();
+}
+
+export function registerScopedFontSource(
+  fontName: string,
+  source: FontSource,
+): () => void {
+  if (!fontName) return () => {};
+  const keys = [...new Set([fontName, fontName.toLowerCase()])];
+  const previous = keys.map((key) => ({
+    key,
+    had: sourceMap.has(key),
+    source: sourceMap.get(key),
+  }));
+  for (let i = 0; i < keys.length; i++) sourceMap.set(keys[i]!, source);
+  cache.clear();
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    for (let i = 0; i < previous.length; i++) {
+      const entry = previous[i]!;
+      if (sourceMap.get(entry.key) !== source) continue;
+      if (entry.had) sourceMap.set(entry.key, entry.source!);
+      else sourceMap.delete(entry.key);
+    }
+    cache.clear();
+  };
 }
 
 export function setFontResolver(
@@ -140,10 +170,11 @@ async function loadFontSource(source: FontSource): Promise<Font> {
   }
   if (source instanceof ArrayBuffer) return await Font.loadAsync(source);
   if (ArrayBuffer.isView(source)) {
-    const slice = source.buffer.slice(
+    const slice = new Uint8Array(
+      source.buffer,
       source.byteOffset,
-      source.byteOffset + source.byteLength,
-    );
+      source.byteLength,
+    ).slice().buffer;
     return await Font.loadAsync(slice);
   }
   throw new Error("Unsupported font source type.");

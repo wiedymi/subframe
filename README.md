@@ -8,7 +8,7 @@
 
 Subframe is a realtime ASS/SSA subtitle renderer for web and Bun. It renders Subforge `SubtitleDocument` directly, targets libass visual parity, and is written entirely in TypeScript plus WGSL — no libass-to-wasm builds involved.
 
-- **Realtime on hostile content.** The jassub benchmark suite — including the Beastars frame-by-frame typesetting storm (~120 events, ~2,100 layers per frame) — plays at 60 fps with zero dropped frames (Apple Silicon, headless Chrome).
+- **Measured on hostile content.** The repository includes Bun and real-browser harnesses for the JASSUB suite, including the Beastars frame-by-frame typesetting storm. Current measured tails are recorded in `docs/GOALS.md`; 60 fps is a target, not a blanket guarantee.
 - **Byte-exact GPU filters.** Blur and subpixel shift run as batched WGSL compute fused into the composite submit. A hardware gate proves GPU output identical (`maxDiff 0`) to the CPU reference path.
 - **Deterministic CPU core.** Fixed-point (1/64 px) layout and raster; same inputs, same pixels. The CPU path is the source of truth and the fallback when no GPU is available.
 - **Bounded memory.** Byte-bounded caches and buffer recycling keep the heaviest benchmark fixture around ~106 MB steady JS heap; typical content runs in tens of MB.
@@ -44,7 +44,7 @@ const sf = new Subframe({
 
 await sf.ready;
 sf.resize(canvas.width, canvas.height);
-sf.setDocument(doc);
+await sf.setDocument(doc);
 
 // Manual clock: render and composite one subtitle frame.
 await sf.render(video.currentTime * 1000);
@@ -56,7 +56,7 @@ sf.attachVideo(video);
 Notes:
 
 - `Subframe` starts async initialization in the constructor; `ready`, `render()`, and `frame()` queue behind it.
-- Workers default on. Package builds embed an inline module worker; strict CSP pages can pass `workerUrl` to a separately served `dist/worker-entry.js`, or `workers: false` to stay single-threaded.
+- Workers default on. Package builds embed an inline module worker; strict CSP pages can serve the exported `subframe/worker-entry.js` asset from their own origin and pass that URL through `workerUrl`, or use `workers: false` to stay single-threaded.
 - Only one live `Subframe` instance is supported per page for now because the renderer core owns module-global caches and worker-pool state.
 - Seeking needs no special handling — jump the time you pass to `render()` or the attached video; the pipeline re-primes itself.
 
@@ -73,14 +73,14 @@ const sf = new Subframe({
 });
 await sf.ready;
 sf.resize(1920, 1080);
-sf.setDocument(doc);
+await sf.setDocument(doc);
 
 const { layers, release } = await sf.frame(90_000);
 // Each layer is a grayscale bitmap + premultiply color + placement — composite
 // however you like (Canvas2D, PNG encode, an encoder pipeline, ...):
 for (const layer of layers) {
   // layer.bitmap (Uint8Array), layer.width / height / stride,
-  // layer.originX / originY (1/64 px fixed point), layer.color, layer.z
+  // layer.originX / originY (pixel coordinates), layer.color, layer.z
 }
 release();
 sf.dispose();
@@ -108,10 +108,10 @@ const sf = new Subframe({
 
 Font resolution priority is:
 
-1. Chromium Local Font Access API, when available and permitted.
-2. Embedded ASS `[Fonts]` data on the active document.
-3. The `fonts` array passed to `Subframe`.
-4. `fontResolver`.
+1. Embedded ASS `[Fonts]` data on the active document.
+2. The `fonts` input passed to `Subframe`.
+3. `fontResolver`.
+4. Chromium Local Font Access API, when available and permitted.
 
 Local Font Access requires Chromium support and usually a user gesture/permission grant; denied or unavailable access silently falls through to the next source. Embedded ASS fonts are decoded from the script's UUEncoded `[Fonts]` section and registered by the decoded font's own names, not by the embedded filename.
 
@@ -135,7 +135,7 @@ Everything defaults to the fast path; these exist for A/B tests and constrained 
 |---|---|---|
 | `new Subframe({ workerUrl })` / `setWorkerSource(url)` | inline worker / unset | Worker bootstrap. `workerUrl` is the CSP escape hatch; low-level callers can still use `setWorkerSource`. |
 | `setWorkerPool(false)` / `setWorkerCount(n)` | on / auto | Disable or size the pool. |
-| `sf.setDocument(doc)` / `attachDocument(doc, w, h)` | — | Public facade attach/warmup, or explicit low-level warmup. |
+| `await sf.setDocument(doc)` / `attachDocument(doc, w, h)` | — | Public facade attach/warmup, or explicit low-level warmup. |
 | `setMemoryBudget(bytes)` | ~120 MB ceilings | Scales all byte-bounded caches proportionally. |
 | `setFrameHybrid(false)` / `setFrameScatter(false)` | on | A/B switches for the frame pipeline engines. |
 | `releaseRenderResult(result)` | — | Returns a consumed frame's buffers to the pool (buffering players). |
@@ -154,11 +154,11 @@ Local demo UI with a live perf panel (display cadence, pipeline stats, memory, G
 bun run build
 ```
 
-Generates the inline worker string, then emits `dist/index.js` and `dist/worker-entry.js` (ESM, browser target). The inline worker increases the main bundle size; pass `workerUrl` if your deployment prefers serving `dist/worker-entry.js` separately or blocks Blob workers with CSP.
+Builds the worker in memory, injects it through a build plugin without modifying source files, emits `dist/index.js`, `dist/worker-entry.js`, and generated declarations, then type-checks the public package. The inline worker increases the main bundle size; pass `workerUrl` if your deployment prefers the exported standalone worker or blocks Blob workers with CSP.
 
 ## Advanced / core API
 
-The facade is a thin owner for the existing core pieces. Advanced integrations can still compose them directly:
+The facade owns backend selection, font registration, worker lifecycle, document warmup, playback scheduling, and result lifetime. Advanced integrations can compose the intentionally exported low-level pieces directly:
 
 ```ts
 import {
@@ -177,7 +177,7 @@ Use the core API when you need custom scheduling, tracing, or backend ownership.
 The repo carries its own proof harnesses; all run headless:
 
 ```sh
-bun test test/                                 # unit + render tests
+bun test ./test                                # unit + render tests
 bun run test:golden                            # golden-image parity fixtures
 bun run tools/parity/sweep.ts                  # frame sweep vs native libass (pixel diff)
 bun run tools/gpu-headless/run-headless.ts     # GPU==CPU byte-exactness gate (real hardware)

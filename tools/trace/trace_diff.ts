@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 
 type Diff = { path: string; a: unknown; b: unknown };
 
-function getArg(args: string[], name: string): string | undefined {
+function getArg(args: string[], name: string, fallback?: string): string | undefined {
   const idx = args.indexOf(name);
-  if (idx === -1) return undefined;
-  return args[idx + 1];
+  if (idx === -1) return fallback;
+  return args[idx + 1] ?? fallback;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

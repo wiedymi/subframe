@@ -242,7 +242,7 @@ export async function createWebGPUBackend(
     height: number;
   }>();
 
-  let scratch: Uint8Array | null = null;
+  let scratch: Uint8Array<ArrayBuffer> | null = null;
   let scratchSize = 0;
   let frameCounter = 0;
   let lastStats: CompositorStats = { drawCalls: 0, uploads: 0, atlasPages: 0 };
@@ -313,7 +313,7 @@ export async function createWebGPUBackend(
     rebuildPageBindGroups();
   };
 
-  const ensureScratch = (size: number): Uint8Array => {
+  const ensureScratch = (size: number): Uint8Array<ArrayBuffer> => {
     if (!scratch || scratchSize < size) {
       scratch = new Uint8Array(size);
       scratchSize = size;
@@ -458,7 +458,7 @@ export async function createWebGPUBackend(
         req.clipInverse = clip.inverse;
         req.layerOriginX = Math.round(layer.originX);
         req.layerOriginY = Math.round(layer.originY);
-        stats.maskRequests++;
+        stats.maskRequests = (stats.maskRequests ?? 0) + 1;
         countClipMaskInput(clip.bitmap, clip.width, clip.height, clip.stride);
       }
       reqs.push(req);

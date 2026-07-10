@@ -20,7 +20,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SourceMapConsumer } from "source-map-js";
+import { SourceMapConsumer, type RawSourceMap } from "source-map-js";
 import { setFontSearchPaths, resolveFontPath } from "../../src/io/fonts/resolve";
 
 type JsonObject = Record<string, any>;
@@ -62,7 +62,7 @@ mkdirSync(outDir, { recursive: true });
 
 type BuildOutput = {
   js: string;
-  map: JsonObject | null;
+  map: RawSourceMap | null;
 };
 
 async function bundle(entrypoint: string): Promise<BuildOutput> {
@@ -78,10 +78,10 @@ async function bundle(entrypoint: string): Promise<BuildOutput> {
     throw new Error(`bundle failed: ${entrypoint}`);
   }
   let js = "";
-  let map: JsonObject | null = null;
+  let map: RawSourceMap | null = null;
   for (const output of result.outputs) {
     if (output.path.endsWith(".js")) js = await output.text();
-    if (output.path.endsWith(".js.map")) map = JSON.parse(await output.text()) as JsonObject;
+    if (output.path.endsWith(".js.map")) map = JSON.parse(await output.text()) as RawSourceMap;
   }
   if (!js) throw new Error(`bundle produced no JS for ${entrypoint}`);
   return { js, map };
@@ -309,7 +309,7 @@ function summarize(values: number[]): { p50: number; p95: number; max: number; m
 
 function heapWatermarkMiB(run: any): { peak: number; steady: number; last: number } {
   const samples = Array.isArray(run?.heapSamples) ? run.heapSamples : [];
-  const vals = samples
+  const vals: number[] = (samples as any[])
     .map((s: any) => Number(s.usedJSHeapSize ?? 0))
     .filter((v: number) => Number.isFinite(v) && v > 0)
     .map(bytesToMiB);
@@ -607,6 +607,7 @@ function printRunSummary(run: any): void {
 
 async function main(): Promise<void> {
   const port = server.port;
+  if (port === undefined) throw new Error("heap profile server did not bind a port");
   const mapper = makeSourceMapper(port);
   const userDataDir = mkdtempSync(join(tmpdir(), "gpu-heap-profile-"));
   const flags = [

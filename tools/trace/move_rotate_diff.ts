@@ -20,10 +20,12 @@ type DiffStats = {
   pixelsOver: number;
 };
 
-function getArg(args: string[], name: string, fallback?: string) {
+function getArg(args: string[], name: string, fallback: string): string;
+function getArg(args: string[], name: string): string | undefined;
+function getArg(args: string[], name: string, fallback?: string): string | undefined {
   const idx = args.indexOf(name);
   if (idx === -1) return fallback;
-  return args[idx + 1];
+  return args[idx + 1] ?? fallback;
 }
 
 function readPng(path: string) {

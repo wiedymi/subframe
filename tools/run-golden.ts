@@ -113,7 +113,7 @@ async function main() {
           "--out", refOut,
         ];
         if (fontsDir) {
-          refArgs.splice(refArgs.length - 1, 0, "--fonts", fontsDir);
+          refArgs.splice(refArgs.length - 2, 0, "--fonts", fontsDir);
         }
         const code = await run(manifest.renderers.libass.cmd, refArgs);
         if (code !== 0) {
@@ -131,7 +131,7 @@ async function main() {
         "--out", outOut,
       ];
       if (fontsDir) {
-        outArgs.splice(outArgs.length - 1, 0, "--fonts", fontsDir);
+        outArgs.splice(outArgs.length - 2, 0, "--fonts", fontsDir);
       }
       const code = await run(manifest.renderers.subframe.cmd, outArgs);
       if (code !== 0) {
@@ -182,7 +182,7 @@ async function main() {
             traceOut,
           ];
           if (fontsDir) {
-            traceArgs.splice(traceArgs.length - 1, 0, "--fonts", fontsDir);
+            traceArgs.splice(traceArgs.length - 2, 0, "--fonts", fontsDir);
           }
           await run(["bun"], traceArgs);
         }
@@ -204,7 +204,7 @@ async function main() {
             traceOut,
           ];
           if (fontsDir) {
-            traceArgs.splice(traceArgs.length - 1, 0, "--fonts", fontsDir);
+            traceArgs.splice(traceArgs.length - 2, 0, "--fonts", fontsDir);
           }
           await run(["bun"], traceArgs);
         }

@@ -1,42 +1,19 @@
-# Debug tools
+# Debug and verification tools
 
-## For the agent (CLI + automation)
-- `tools/render_ref`: render a specific time/event with libass to PNG.
-- `tools/render_subframe`: render the same input with subframe to PNG.
-- `tools/diff`: pixel diff with heatmap + summary stats.
-- `tools/diff/bbox_compare.ts`: compare libass vs subframe bounding boxes and flag size mismatches.
-- `tools/trace/render_trace.ts`: dump JSON trace of layout decisions for one frame.
-- `tools/trace/trace_diff.ts`: compare two trace JSONs and show first mismatch.
-- `tools/trace/move_rotate_diff.ts`: per-layer diff report for a targeted event (useful for Move/Rotate).
-- `tools/repro`: bundle ASS + fonts + config + trace into a zip.
-- `tools/bench/bench_basic.ts`: micro-benchmarks for shaping and raster.
-- `tools/bench/bench_fixtures.ts`: end-to-end frame timing over fixtures.
+Only tools that currently exist are listed here.
 
-### Trace content (v1)
-- Inputs: ASS event, resolved style, tag timeline.
-- Shaping: per-item font size, spacing, synthetic bold/italic.
-- Layout: line breaks, alignment, margins, block anchor, karaoke segments.
-- Transform: rotate/shear/origin values per item.
-- Raster: bitmap layer bounds (origin + width/height).
-- Filters: outline/blur/shadow params (including x/y overrides).
-- Composite: final layer order with z, colors, and clip type.
+- `tools/ref/render_libass`: native libass frame renderer (built by `tools/ref/build_libass.sh`).
+- `tools/ref/render_subframe.ts`: Subframe frame renderer used by the golden harness.
+- `tools/diff/pngdiff.ts`: PNG heatmap and summary statistics.
+- `tools/diff/bbox_compare.ts` and `layer_bbox_compare.ts`: frame/layer bounds comparisons.
+- `tools/trace/render_trace.ts`: JSON trace for a frame.
+- `tools/trace/render_event.ts`: targeted event render/trace.
+- `tools/trace/trace_diff.ts` and `move_rotate_diff.ts`: locate the first trace or transform mismatch.
+- `tools/parity/sweep.ts`: multi-frame libass comparison.
+- `tools/bench/*`: Bun micro, fixture, reference, baseline-update, and comparison harnesses.
+- `tools/gpu-headless/run-headless.ts`: real-WebGPU CPU/GPU byte-equality gate.
+- `tools/gpu-headless/run-worker-check.ts`: browser worker bootstrap check.
+- `tools/gpu-headless/run-bench.ts`, `run-smoothness.ts`, and `run-versus.ts`: browser performance harnesses.
+- `tools/gpu-headless/run-heap-profile.ts`: browser heap/profile capture.
 
-## For the human (visual tools)
-- Debug viewer (web) with frame scrubber and timeline.
-- Side-by-side: libass vs subframe + diff heatmap.
-- Overlay toggles: baselines, glyph origins, bounding boxes,
-  margins, alignment anchor, clip regions.
-- Glyph atlas inspector (including SDF/MSDF layers).
-- Tag inspector: resolved per-event tag state at time T.
-- Pipeline step viewer: parse -> shape -> layout -> transform ->
-  raster -> filters -> composite.
-
-## Minimum viable tooling (phase 1)
-- CLI to render one frame and diff against libass.
-- JSON trace for a single event at a given timestamp.
-- Simple HTML viewer that loads traces and shows overlays.
-
-## Debug UX goals
-- One command to reproduce a mismatch.
-- Every mismatch links to a concrete stage with numbers.
-- Zero ambiguity about rounding and coordinate spaces.
+The trace schema exposes resolved event/style inputs, line placement, transform values, glyph/layer bounds, filter parameters, clips, and final ordering. A standalone repro packager and graphical trace viewer remain future work; they are not currently shipped.

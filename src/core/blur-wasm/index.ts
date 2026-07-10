@@ -235,7 +235,7 @@ function selfVerify(jsRef: JsBlurLevel0, makeMethod: MakeMethod): boolean {
 
 function tryInstantiateSync(bytes: Uint8Array): boolean {
   try {
-    const mod = new WebAssembly.Module(bytes);
+    const mod = new WebAssembly.Module(bytes.slice());
     const inst = new WebAssembly.Instance(mod, {});
     return setupInstance(inst);
   } catch {

@@ -26,9 +26,9 @@ type NonZeroBounds = {
 
 const blurMethodCache = new Map<number, BlurMethod>();
 let blurWasmInit = false;
-let blurScratchA = new Int16Array(0);
-let blurScratchB = new Int16Array(0);
-let blurRowScratch = new Int16Array(0);
+let blurScratchA: Int16Array<ArrayBufferLike> = new Int16Array(0);
+let blurScratchB: Int16Array<ArrayBufferLike> = new Int16Array(0);
+let blurRowScratch: Int16Array<ArrayBufferLike> = new Int16Array(0);
 // Scratch arrays are module-level for normal glyph-sized blur calls, but they
 // must not retain a one-off full-frame bitmap high-water forever. Larger needs
 // get a local scratch buffer that dies after the call; output pixels are

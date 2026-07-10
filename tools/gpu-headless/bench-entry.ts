@@ -11,19 +11,23 @@ import {
   prepareDocument,
   createWebGPUBackend,
   setFontResolver,
-  clearEventLayerCache,
-  clearRasterCaches,
-  getEventLayerCacheStats,
   setWorkerPool,
   setWorkerSource,
-  getGpuFilterProvider,
-  setGpuFilterProvider,
-  setGpuFilterDeferEnabled,
   releaseRenderResult,
   registerFontSource,
   Subframe,
   type CompositorBackend,
 } from "../../src";
+import {
+  clearEventLayerCache,
+  clearRasterCaches,
+  getEventLayerCacheStats,
+} from "../../src/core/pipeline";
+import {
+  getGpuFilterProvider,
+  setGpuFilterDeferEnabled,
+  setGpuFilterProvider,
+} from "../../src/core/filters/gpu-provider";
 import { getWorkerPoolStats, isWorkerPoolUsable, setWorkerCount } from "../../src/core/worker-pool";
 import { getFramePipelineStats, resetFramePipeline, setFrameScatter, setFrameHybrid } from "../../src/core/pipeline";
 import { setAllocCensusEnabled } from "../../src/core/raster/bitmap";
@@ -378,7 +382,7 @@ async function runOne(
     }
     layerCounts[i] = result.layers.length;
     gpuRoutedCounts[i] = routed;
-    if (sf) result.release();
+    if ("release" in result) (result.release as () => void)();
     else releaseRenderResult(result);
     if (result.activeEvents.length > activeEventsMax) activeEventsMax = result.activeEvents.length;
     const rendered = i + 1;

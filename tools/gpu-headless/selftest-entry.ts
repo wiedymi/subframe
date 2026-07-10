@@ -11,15 +11,16 @@ import {
   createWebGPUBackend,
   registerFontSource,
   setFontResolver,
-  clearEventLayerCache,
-  clearRasterCaches,
   resetFramePipeline,
-  setGpuFilterProvider,
-  getGpuFilterProvider,
   setFramePipeline,
   setWorkerPool,
   setWorkerSource,
 } from "../../src";
+import { clearEventLayerCache, clearRasterCaches } from "../../src/core/pipeline";
+import {
+  getGpuFilterProvider,
+  setGpuFilterProvider,
+} from "../../src/core/filters/gpu-provider";
 import { libassGaussianBlur } from "../../src/core/libass_blur";
 import { GpuBlurEngine, findBestMethod } from "../../src/backend/webgpu/blur";
 import {

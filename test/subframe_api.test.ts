@@ -2,12 +2,17 @@ import { afterEach, expect, test } from "bun:test";
 import { parseASS } from "subforge/ass";
 import {
   Subframe,
+} from "../src";
+import {
   clearRegisteredFontSourcesForTests,
+  resetFontCache,
+  snapshotFontSources,
+} from "../src/io/fonts/cache";
+import { resetLocalFontAccessForTests } from "../src/io/fonts/local-access";
+import {
   decodeAssEmbeddedFont,
   extractFontNames,
-  resetFontCache,
-  resetLocalFontAccessForTests,
-} from "../src";
+} from "../src/io/fonts/sources";
 
 const ARIAL_PATH = "test/fixtures/jassub-benchmark/fonts/arial.ttf";
 const LATO_PATH = "test/fixtures/jassub-benchmark/fonts/Lato-Regular.ttf";
@@ -164,7 +169,7 @@ test("Subframe decodes and registers embedded ASS fonts", async () => {
   }
 });
 
-test("Subframe font resolution prefers Local Font Access over provided fonts", async () => {
+test("Subframe font resolution prefers provided fonts over Local Font Access", async () => {
   resetLocalFontAccessForTests();
   resetFontCache();
   const localBytes = await readFont(ARIAL_PATH);
@@ -191,8 +196,8 @@ test("Subframe font resolution prefers Local Font Access over provided fonts", a
     expect(frame.layers.length).toBeGreaterThan(0);
     frame.release();
     const stats = sf.stats().fonts;
-    expect(stats.local).toBeGreaterThan(0);
-    expect(stats.provided).toBe(0);
+    expect(stats.provided).toBeGreaterThan(0);
+    expect(stats.local).toBe(0);
   } finally {
     sf.dispose();
     if (previousQuery) {
@@ -203,6 +208,37 @@ test("Subframe font resolution prefers Local Font Access over provided fonts", a
         .queryLocalFonts;
     }
     resetLocalFontAccessForTests();
+  }
+});
+
+test("Subframe disposal unregisters instance-owned font aliases", async () => {
+  const bytes = await readFont(LATO_PATH);
+  const sf = new Subframe({ workers: false, fonts: [bytes] });
+  await sf.ready;
+  expect(snapshotFontSources().length).toBeGreaterThan(0);
+  sf.dispose();
+  expect(snapshotFontSources()).toHaveLength(0);
+});
+
+test("switching to a document without embedded fonts removes old aliases", async () => {
+  const bytes = new Uint8Array(await readFont(ARIAL_PATH));
+  const sf = new Subframe({ workers: false });
+  try {
+    await sf.ready;
+    sf.resize(320, 180);
+    const embeddedDoc = basicDocument("ArialMT") as ReturnType<typeof basicDocument> & {
+      fonts?: Array<{ name: string; data: string }>;
+    };
+    embeddedDoc.fonts = [{ name: "arial.ttf", data: encodeAssEmbeddedFont(bytes) }];
+    sf.setDocument(embeddedDoc);
+    (await sf.frame(1000)).release();
+    expect(snapshotFontSources().length).toBeGreaterThan(0);
+
+    sf.setDocument(basicDocument("Arial"));
+    (await sf.frame(1000)).release();
+    expect(snapshotFontSources()).toHaveLength(0);
+  } finally {
+    sf.dispose();
   }
 });
 

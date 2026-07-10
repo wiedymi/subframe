@@ -1,12 +1,11 @@
 # Goals for subframe
 
 ## Vision
-Build a subtitle renderer that consumes Subforge `SubtitleDocument` and targets **full ASS spec rendering with 1:1 visual parity vs libass** on web and Bun, with WebGL/WebGPU compositor backends available.
-Other subtitle formats are rendered via Subforge conversion; parity is only guaranteed for ASS/SSA.
+Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works toward 1:1 visual parity with libass for the tested ASS/SSA surface on web and Bun. Other formats are rendered through Subforge without a libass-parity claim.
 
 ## v0 scope (must-have)
 - [x] Format-agnostic rendering API that accepts Subforge `SubtitleDocument`.
-- [ ] Full ASS spec rendering, with 1:1 parity vs libass for supported tags.
+- [ ] Prove 1:1 parity vs libass for every advertised ASS/SSA feature and fixture.
 - [x] Render directly from Subforge events/segments (no extra abstraction layer).
 - [x] Core ASS layout + tag engine: \fs, \fscx, \fscy, \fsp, \bord, \shad, \blur, \be, \c, \alpha, \an, \pos, \move, \org, \q.
 - [x] Text styling: \b, \i, \u, \s.
@@ -26,10 +25,10 @@ Other subtitle formats are rendered via Subforge conversion; parity is only guar
 ## Constraints
 - [x] Single build that runs in browser and Bun (font URLs required in browser).
 - [x] Minimal dependencies; keep subframe separate from subforge core (monorepo allowed).
-- [ ] No false claims in docs; only document implemented features.
+- [x] No false claims in docs; only document implemented and measured behavior.
 
 ## Success criteria
-- [ ] Pixel-diff parity against libass for a representative test suite. (latest 2026-01-01: passRate=0.00% (0/3))
+- [ ] Pixel-diff parity against libass for a representative test suite. (2026-07-10 smoke: 0/3; mean error 1.051-1.104, pixels over tolerance 2.237%-2.484%)
 - [x] Deterministic output given the same inputs (fonts, timestamps, config).
 - [x] Clear instrumentation for debugging layout/rasterization differences.
 
@@ -49,5 +48,15 @@ Other subtitle formats are rendered via Subforge conversion; parity is only guar
 - [x] See `docs/perf.md` for measurement guidance and performance rules.
  
 ## Baselines (recorded locally)
-- [ ] `bench:reference` @ 1080p 60fps (record once, update on regressions).
-- [ ] `bench:fixtures` @ 1080p 60fps (record once, update on regressions).
+
+2026-07-10, Apple Silicon, headless Chrome 150, 1920x1080, JASSUB Beastars stress window, 300 frames:
+
+- Low-level frame path: p50 0.475ms, p95 17.900ms, p99 29.445ms, max 167.055ms; 23/300 frames exceeded 16.67ms.
+- `Subframe.frame()` path: p50 0.475ms, p95 17.315ms, p99 39.040ms, max 221.490ms; 18/300 frames exceeded 16.67ms.
+- Playback smoothness comparison: p95 18.7ms before vs 26.6ms after, standard deviation 6.24ms vs 6.73ms, max 68.4ms vs 30.9ms. This is mixed rather than a demonstrated overall win.
+
+These are local snapshots, not cross-machine guarantees. The 60fps and tail-latency checkboxes remain open because the measured tails exceed the targets.
+
+Verification rerun after the lifecycle/API fixes (same date/environment, `Subframe.frame()`, 300 Beastars frames): achieved cadence 60.2fps, total p50 0.48ms, p95 30.11ms, max 352.46ms, with 12/300 pipeline renders above 16.67ms. The variance versus the earlier snapshot reinforces that this is not yet a stable tail-latency pass.
+
+The corresponding 8-second smoothness rerun measured display-interval standard deviation 6.72ms reactive vs 6.65ms render-ahead, p95 18.40ms vs 26.40ms, and max 77.60ms vs 31.10ms. Render-ahead materially caps the worst stall and holds about 59.9fps, but does not yet improve p95 cadence.

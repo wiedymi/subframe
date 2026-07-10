@@ -903,7 +903,7 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
   // is stored, so a skipped event just re-renders live on its active frame.
   const cacheable =
     cacheMode !== "none" && !!layout.cacheKey && isEventCacheReusable(ev);
-  if (cacheable) {
+  if (cacheable && layout.cacheKey) {
     const cached = EVENT_LAYER_CACHE.get(ev);
     if (
       cached &&
@@ -966,7 +966,7 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
   pushEventLayers(ev, frame, timeMs, layout, parScaleX, layers, traceEvent, cacheTemplates, cacheable && !traceCtx);
   if (isProfiling()) addRasterMs(profileNow() - rasterStart);
 
-  if (cacheable) {
+  if (cacheable && layout.cacheKey) {
     const entry = buildCachedEntry(
       ev,
       layout.cacheKey,

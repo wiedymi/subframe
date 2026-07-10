@@ -23,8 +23,6 @@ import {
   renderFrame,
   createWebGPUBackend,
   setFontResolver,
-  clearEventLayerCache,
-  clearRasterCaches,
   setWorkerSource,
   registerFontSource,
   getFramePipelineStats,
@@ -32,6 +30,7 @@ import {
   type CompositorBackend,
   type RenderResult,
 } from "../../src";
+import { clearEventLayerCache, clearRasterCaches } from "../../src/core/pipeline";
 import { setWorkerCount } from "../../src/core/worker-pool";
 import { RenderAheadPlayer } from "../../src/player/render-ahead";
 

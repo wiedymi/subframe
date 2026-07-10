@@ -1,4 +1,5 @@
 import { BitmapBuilder, PixelMode } from "text-shaper";
+import type { RasterizedGlyph } from "text-shaper";
 import { libassGaussianBlur } from "../libass_blur";
 import { addBlurMs, isProfiling, profileNow } from "../profile";
 import { SUBPIXEL_SCALE, toFixed26_6, fromFixed26_6 } from "../math/fixed";
@@ -159,32 +160,10 @@ export function quantizeTransformPos(value: number): number {
 }
 
 export function applyTextShaperGaussianBlur(
-  glyph: {
-    bitmap: {
-      buffer: Uint8Array;
-      width: number;
-      rows: number;
-      pitch: number;
-      pixelMode: PixelMode;
-      numGrays?: number;
-    };
-    bearingX: number;
-    bearingY: number;
-  },
+  glyph: RasterizedGlyph,
   sigmaX: number,
   sigmaY: number,
-): {
-  bitmap: {
-    buffer: Uint8Array;
-    width: number;
-    rows: number;
-    pitch: number;
-    pixelMode: PixelMode;
-    numGrays?: number;
-  };
-  bearingX: number;
-  bearingY: number;
-} {
+): RasterizedGlyph {
   if (!(sigmaX > 0 || sigmaY > 0)) return glyph;
   let builder = BitmapBuilder.fromRasterizedGlyph(glyph);
   const blurred = builder.adaptiveBlur(sigmaX, sigmaY).toRasterizedGlyph();
@@ -192,32 +171,10 @@ export function applyTextShaperGaussianBlur(
 }
 
 export function applyLibassGaussianBlur(
-  glyph: {
-    bitmap: {
-      buffer: Uint8Array;
-      width: number;
-      rows: number;
-      pitch: number;
-      pixelMode: PixelMode;
-      numGrays?: number;
-    };
-    bearingX: number;
-    bearingY: number;
-  },
+  glyph: RasterizedGlyph,
   sigmaX: number,
   sigmaY: number,
-): {
-  bitmap: {
-    buffer: Uint8Array;
-    width: number;
-    rows: number;
-    pitch: number;
-    pixelMode: PixelMode;
-    numGrays?: number;
-  };
-  bearingX: number;
-  bearingY: number;
-} {
+): RasterizedGlyph {
   if (!(sigmaX > 0 || sigmaY > 0)) return glyph;
   if (glyph.bitmap.pixelMode !== PixelMode.Gray) return glyph;
   const start = isProfiling() ? profileNow() : 0;
@@ -237,7 +194,10 @@ export function applyLibassGaussianBlur(
   );
   if (isProfiling()) addBlurMs(profileNow() - start);
   return {
-    bitmap: blurred.bitmap,
+    bitmap: {
+      ...blurred.bitmap,
+      numGrays: blurred.bitmap.numGrays ?? 256,
+    },
     bearingX: glyph.bearingX - blurred.shiftX,
     bearingY: glyph.bearingY + blurred.shiftY,
   };

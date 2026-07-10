@@ -1236,7 +1236,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
         }
 
         const runRecords: Array<{
-          font: Awaited<ReturnType<typeof getFont>>;
+          font: LineItem["font"];
           fontStyle: ResolvedFontStyle;
           shaped: GlyphBuffer;
           width: number;
@@ -1340,6 +1340,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
             originOverride: currentOrigin
               ? { x: currentOrigin.x, y: currentOrigin.y }
               : null,
+            drawingBaseline: drawingBaseline ?? 0,
             border,
             borderX,
             borderY,

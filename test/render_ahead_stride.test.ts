@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { RenderAheadPlayer } from "../playground/render-ahead";
+import { RenderAheadPlayer } from "../src/player/render-ahead";
 import type { RenderResult } from "../src/core/pipeline";
 
 // Drives the player with a mock 60Hz vsync and a render whose cost starts cold
@@ -70,5 +70,111 @@ describe("render-ahead stride recovery", () => {
     // And the cold phase did engage a slower cadence at least once (the test
     // exercises recovery, not a never-slow path).
     expect(Math.max(...strideLog)).toBeGreaterThan(1);
+  });
+
+  test("an external media clock selects the matching frame instead of slowing time", async () => {
+    let clock = 0;
+    const callbacks: Array<(ts: number, mediaTimeMs?: number) => void> = [];
+    const presented: number[] = [];
+    const player = new RenderAheadPlayer(
+      {
+        render: async (_doc, timeMs) => ({ ...makeResult(), timeMs } as any),
+        present: (frame) => presented.push(frame.timeMs),
+        width: () => 640,
+        height: () => 360,
+        now: () => clock,
+        requestFrame: (cb) => callbacks.push(cb),
+      },
+      { fps: 60, maxAhead: 12, minStartAhead: 1 },
+    );
+
+    player.start(makeDoc(), 0);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    for (const mediaTimeMs of [0, 1000 / 24, 2000 / 24, 3000 / 24]) {
+      const cb = callbacks.shift();
+      expect(cb).toBeDefined();
+      clock += 1000 / 24;
+      cb!(clock, mediaTimeMs);
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    }
+    player.stop();
+
+    expect(presented.length).toBeGreaterThan(1);
+    expect(Math.abs(presented[presented.length - 1]! - 125)).toBeLessThanOrEqual(
+      1000 / 60,
+    );
+  });
+
+  test("an external media-clock jump abandons an obsolete in-flight render", async () => {
+    let clock = 0;
+    let finishFirst!: () => void;
+    const firstRender = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const callbacks: Array<(ts: number, mediaTimeMs?: number) => void> = [];
+    const renderedTimes: number[] = [];
+    const releasedTimes: number[] = [];
+    const player = new RenderAheadPlayer(
+      {
+        render: async (_doc, timeMs) => {
+          renderedTimes.push(timeMs);
+          if (renderedTimes.length === 1) await firstRender;
+          return { ...makeResult(), timeMs } as any;
+        },
+        present: () => {},
+        release: (frame) => releasedTimes.push(frame.timeMs),
+        width: () => 640,
+        height: () => 360,
+        now: () => clock,
+        requestFrame: (cb) => callbacks.push(cb),
+      },
+      { fps: 60, maxAhead: 4, minStartAhead: 1 },
+    );
+
+    player.start(makeDoc(), 0);
+    await Promise.resolve();
+    clock = 1000;
+    callbacks.shift()!(clock, 1000);
+    finishFirst();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    player.stop();
+
+    expect(renderedTimes[0]).toBe(0);
+    expect(renderedTimes[1]).toBeCloseTo(1000, 6);
+    expect(releasedTimes).toContain(0);
+  });
+
+  test("restart resets pacing and session statistics", async () => {
+    let clock = 0;
+    let seeks = 0;
+    const callbacks: Array<(ts: number, mediaTimeMs?: number) => void> = [];
+    const player = new RenderAheadPlayer(
+      {
+        render: async () => makeResult(),
+        present: () => {},
+        width: () => 640,
+        height: () => 360,
+        now: () => clock,
+        requestFrame: (cb) => callbacks.push(cb),
+        onSeek: () => seeks++,
+      },
+      { minStartAhead: 1 },
+    );
+    player.start(makeDoc(), 0);
+    expect(seeks).toBe(0);
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    clock += 1000 / 60;
+    callbacks.shift()!(clock);
+    expect(player.stats().presented).toBe(1);
+
+    player.start(makeDoc(), 5000);
+    expect(seeks).toBe(1);
+    const stats = player.stats();
+    expect(stats.presented).toBe(0);
+    expect(stats.produced).toBe(0);
+    expect(stats.holds).toBe(0);
+    expect(stats.stride).toBe(1);
+    expect(stats.presentIntervalP50).toBe(0);
+    player.stop();
   });
 });

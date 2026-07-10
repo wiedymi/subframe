@@ -637,6 +637,18 @@ function abortScatters(reason: string): void {
 // setTimeout clamp.
 let scatterYieldChannel: MessageChannel | null = null;
 const scatterYieldWaiters: Array<() => void> = [];
+
+function closeScatterYieldChannel(): void {
+  const channel = scatterYieldChannel;
+  scatterYieldChannel = null;
+  if (channel) {
+    channel.port1.onmessage = null;
+    channel.port1.close();
+    channel.port2.close();
+  }
+  while (scatterYieldWaiters.length > 0) scatterYieldWaiters.shift()!();
+}
+
 function scatterYield(): Promise<void> {
   if (typeof MessageChannel === "undefined") return Promise.resolve();
   if (!scatterYieldChannel) {
@@ -1673,6 +1685,7 @@ export function setWorkerPool(enabled: boolean): void {
     return;
   }
   userDisabled = true;
+  closeScatterYieldChannel();
   capacityPressureRuns = 0;
   statScaleUps = 0;
   statMaxPending = 0;

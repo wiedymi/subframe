@@ -1,99 +1,44 @@
 # Architecture overview
 
-## Pipeline (libass-aligned)
-1) Parse input into Subforge `SubtitleDocument` (any supported format)
-2) Render **directly from Subforge events/segments** (no extra abstraction layer)
-3) Shape runs with text-shaper (glyphs, metrics)
-4) Layout: positioning, wrapping, margins, alignment
-5) Karaoke timing and segment splitting
-6) Reorder and align (RTL, \q)
-7) Bounding boxes and transform prep
-8) Apply transforms and timing-sensitive ops (pre-raster)
-9) Rasterize glyph paths to alpha bitmaps
-10) Post-raster filters: outline, blur, shadow
-11) Composite bitmaps into frame (WebGL / Canvas2D)
+## Runtime pipeline
 
-## Core modules (current)
-- `core/pipeline.ts`: thin frame-level orchestrator
-- `core/pipeline/event.ts`: per-event orchestration
-- `core/layout/*`: shaping + layout + positioning
-- `core/raster/*`: glyph raster + filters + layer output
-- `core/render.ts`: public API for `SubtitleDocument` rendering
-- `core/trace.ts`: trace schema + helpers for debug visibility
-- `core/data/types.ts`: shared data types
-- `core/math/fixed.ts`: fixed-point helpers (1/64 px)
-- `io/fonts/*`: font discovery + caching (Bun + browser-compatible)
+1. A caller parses any supported subtitle format with Subforge and passes its `SubtitleDocument` directly to Subframe.
+2. `core/pipeline.ts` finds active Subforge events, coordinates warm caches, workers, frame deduplication, scatter/hybrid scheduling, and returned-buffer lifetime.
+3. `core/pipeline/event.ts` resolves each event's Subforge segments and ASS effects without introducing a second run/segment document model.
+4. `core/layout/*` resolves fonts, shapes with text-shaper, wraps lines, and places items.
+5. `core/raster/*` constructs paths, applies 3D transforms before scan conversion, rasterizes masks, and emits `BitmapLayer` records.
+6. Outline, blur, edge blur, and shadow remain post-raster bitmap operations. They run on the CPU unless a WebGPU backend accepts a byte-exact deferred filter descriptor.
+7. Canvas2D, WebGL, or WebGPU composites the final ordered layers. WebGL is compositor-only; WebGPU additionally owns its optional integer-compute implementation of the same post-raster filters.
 
-## Folder structure (current)
-```
-src/
-  core/
-    pipeline.ts         # frame orchestrator
-    pipeline/           # per-event pipeline
-    render.ts           # top-level render API
-    trace.ts            # trace schema + builders
-    animate/            # fade/move/transform logic
-    clip/               # clip parsing + application
-    filters/            # blur helpers
-    layout/             # line building + layout
-    raster/             # glyph raster + bitmap utils
-    shape/              # shaping helpers
-    style/              # color + font style resolution
-    tags/               # tag parsing + effect helpers
-    transform/          # matrix + affine helpers
-    math/               # fixed-point utilities
-    data/               # core data types (FrameContext, BitmapLayer, etc.)
-  io/
-    fonts/       # font discovery/loading glue (browser + Bun)
-test/
-  fixtures/    # ASS samples + expected outputs (parity focus)
-  harness/     # libass comparison harness
-tools/
-  trace/       # trace emitters
-  diff/        # image diff helpers (dev only)
-  bench/       # micro + fixture benchmarks
-  ref/         # libass + subframe reference renderers
-docs/
-  GOALS.md
-  ARCHITECTURE.md
-  DEBUG_TOOLS.md
-  perf/
-```
+The WebGPU filter path is an explicit exception to the older “backend only composites” shorthand. It may execute filters, but it may not decide layout, shape text, rasterize paths, or change filter semantics. The hardware gate must show byte-identical masks before that path is enabled.
 
-Notes:
-- Rendering operates on Subforge `SubtitleDocument` directly; avoid creating intermediate run/segment layers.
-- `tools/*` are dev-only and excluded from production bundles.
+## Ownership boundaries
 
-## Data model (initial)
-- `Fixed26_6`: signed 26.6 fixed point (1/64 px) for all geometry
-- `FrameContext`: time, viewport, margins, styles, fonts
-- `SubtitleDocument`: Subforge document (format-agnostic input)
-- `SubtitleEvent`: Subforge event (timing + segments + style refs)
-- `GlyphRun`: glyph ids, advances, offsets, font face, features
-- `LayoutLine`: positioned glyphs, line metrics, alignment
-- `BitmapLayer`: alpha bitmap + origin + size + color + z
-- `RenderItem`: final composited quad (texture + transform + color)
+- `Subframe` is the lifecycle facade: backend selection, explicit fallback reporting, fonts, workers, document warmup, video-clock scheduling, presentation, and disposal.
+- `core/pipeline.ts` is a substantial scheduler and cache owner, not a thin wrapper.
+- `core/layout/*` and `core/raster/*` own deterministic subtitle semantics.
+- `backend/*` owns device resources, atlas allocation, and compositing; WebGPU may also execute proven byte-exact deferred bitmap filters.
+- `io/fonts/*` owns registration and resolution. Facade registrations are scoped and removed on document changes or disposal.
+- `player/render-ahead.ts` owns buffering and pacing. An attached video supplies the authoritative media clock through `requestVideoFrameCallback` when available.
 
-## Backend boundary
-- Core already produces `BitmapLayer[]` per frame.
-- WebGL/WebGPU backends handle atlas placement and compositing only.
-- No layout or filter logic in backend code.
+The core still contains module-global caches and a process-wide worker pool, so only one live `Subframe` facade is supported per JavaScript realm. Low-level callers share that same global state. This limitation is enforced instead of being hidden.
 
-## Determinism rules
-- All math uses fixed-point in core; floats only in GPU shaders.
-- Stable ordering of glyphs and layers across runs.
-- All randomness disabled; explicit seeds if ever needed.
+## Coordinate and determinism rules
 
-## Notes on parity
-- Full ASS spec rendering is the parity target.
-- Other formats are rendered through Subforge conversion; parity is not guaranteed outside ASS/SSA.
-- Apply 3D transforms before rasterization to match libass.
-- Outline/blur/shadow are bitmap filters post-raster.
-- Subpixel rounding must match libass at each stage.
+- Geometry is quantized to 1/64 px at parity-sensitive core boundaries (`SUBPIXEL_MASK = 63`). Public `BitmapLayer.originX` and `originY` are pixel coordinates, not raw 26.6 integers.
+- 3D transforms happen before rasterization.
+- Outline, blur, edge blur, and shadow operate on raster bitmaps.
+- Layer/event ordering is stable. Worker scatter reassembles by the original active-event ordinal before the global z-sort.
+- Same document, font bytes, timestamp, viewport, and options must produce the same masks. Machine-local fonts are the last fallback so explicit and embedded bytes take priority.
+- The render loop performs no GPU readback. Readback exists only in offline/hardware verification tools.
 
-## Browser runtime notes
-- Font loading in browser requires a URL (http/https/data/blob). The renderer does not auto-resolve system fonts outside Bun.
+## Public and package boundary
 
-## Implementation preference
-- Before implementing new bitmap/text shaping (or related) operations, check `refs/text-shaper` for a ready-to-use solution.
-- Before introducing new interfaces or abstraction layers, check `refs/subforge` and reuse existing Subforge data types/systems where possible.
+- `src/index.ts` is an explicit allowlist; adding an internal export is an API decision.
+- The package ships one browser-targeted ESM build that also executes under Bun, plus the same worker as a standalone CSP-friendly asset.
+- Declaration files are generated into `dist`; raw `src` is not published. Because Subforge 0.1.3 exposes a broad source barrel as its type entry, the build also snapshots that pinned dependency's document schema and redirects generated type-only imports to the snapshot. Runtime inputs remain unmodified Subforge objects.
+- The build injects inline-worker code virtually and does not rewrite `src/generated/worker-inline.ts`.
+
+## Parity status
+
+Libass parity is a target for the documented ASS/SSA surface, not a completed guarantee. Golden tests and frame sweeps are the evidence; unsupported or mismatching cases remain failures rather than documentation claims. Other formats rely on Subforge's document conversion and have no libass parity claim.

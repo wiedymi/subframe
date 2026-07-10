@@ -1717,6 +1717,8 @@ async function renderFrameScatter(
     subLayers[i] = {
       layers,
       ordinals: p.ordinals,
+      staticOrdinals: p.staticOrdinals ?? new Int32Array(0),
+      nonStaticOrdinals: p.nonStaticOrdinals ?? new Int32Array(0),
     };
     recordEventOrdinalStaticVerdicts(
       activeEvents,
@@ -1985,6 +1987,20 @@ function ringHasInFlight(): boolean {
 // after any already-pending worker results, guarantees those are processed first.
 let ringYieldChannel: MessageChannel | null = null;
 let ringYieldResolve: (() => void) | null = null;
+
+function closeRingYieldChannel(): void {
+  const channel = ringYieldChannel;
+  ringYieldChannel = null;
+  if (channel) {
+    channel.port1.onmessage = null;
+    channel.port1.close();
+    channel.port2.close();
+  }
+  const resolve = ringYieldResolve;
+  ringYieldResolve = null;
+  resolve?.();
+}
+
 function macrotaskYield(): Promise<void> {
   if (typeof MessageChannel === "undefined") return Promise.resolve();
   if (!ringYieldChannel) {
@@ -2563,6 +2579,7 @@ export function getFramePipelineStats(): FramePipelineStats {
 // Reset ring scheduler state (parked frames + learned cadence + counters).
 // Callers switching documents or seeking out-of-band can force a clean slate.
 export function resetFramePipeline(): void {
+  closeRingYieldChannel();
   invalidateRing();
   releaseResultArenas(lastReturnedResult);
   lastReturnedResult = null;

@@ -9,6 +9,17 @@ Source:
 
 This bundle contains the subtitle, font, and local video assets used by that benchmark page. External videos referenced by the page are kept as URLs in `manifest.json` because they are not stored in the GitHub branch.
 
+## Provenance and license status
+
+Every file below was copied byte-for-byte from the pinned upstream commit and is used only as repository test data. The upstream benchmark repository does not provide an asset-level license manifest, and its site package is marked private; copying an asset from that commit does not establish redistribution rights.
+
+- `subtitles/*`: source path `subtitles/<same filename>`; author and license not recorded upstream.
+- `fonts/*`: source path `fonts/<same filename>`; each font's license must be verified from its original foundry/distribution before redistribution. In particular, filenames such as Arial, Slate Pro, and FOT do not imply an open license.
+- `videos/*`: source path `videos/<same filename>`; media copyright/license not recorded upstream.
+- `manifest.json`: repository-authored metadata derived from upstream `src/lib/constants.ts` at the pinned commit.
+
+The npm `files` allowlist excludes all fixtures. Do not copy this bundle into packages, demos, or published benchmark artifacts without independently clearing each asset.
+
 ## Layout
 
 - `subtitles/`: upstream ASS fixtures.

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PathBuilder } from "text-shaper";
+import { PathBuilder, type GlyphBuffer } from "text-shaper";
 import { parseASS } from "subforge/ass";
 import type { SubtitleDocument, SubtitleEvent } from "subforge/core";
 import { setFontSearchPaths } from "../../src/io/fonts/resolve";
@@ -110,7 +110,7 @@ async function main() {
   const parsed = parseASS(text, { onError: "collect", strict: false, preserveOrder: true });
   const doc: SubtitleDocument = parsed.document;
   const shapeCtx = createShapeContext();
-  const usedGlyphBuffers = [];
+  const usedGlyphBuffers: GlyphBuffer[] = [];
   const drawingRecords: RecordKey[] = [];
   const textRecords: RecordKey[] = [];
   const drawingEvents = new Set<number>();

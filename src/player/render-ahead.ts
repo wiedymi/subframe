@@ -59,7 +59,7 @@ export interface RenderAheadDeps<T = RenderResult> {
   // Injected clock + scheduler so the loop is testable/benchable. Default to
   // performance.now / requestAnimationFrame in the browser wiring.
   now(): number;
-  requestFrame(cb: (ts: number) => void): void;
+  requestFrame(cb: (ts: number, mediaTimeMs?: number) => void): void;
   // Called after a discontinuity/seed reset so the core ring relearns cleanly.
   onSeek?(): void;
   onError?(err: unknown): void;
@@ -133,6 +133,7 @@ export class RenderAheadPlayer<T = RenderResult> {
 
   private buffer = new Map<number, BufferedFrame<T>>();
   private productionCursor = 0; // next grid index to render
+  private productionFloor = 0; // earliest useful index for an external media clock
   private displayCursor = -1; // last grid index presented
 
   // Producer gate (resolves when the display advances or playback stops).
@@ -196,17 +197,38 @@ export class RenderAheadPlayer<T = RenderResult> {
   // Begin render-ahead playback from a media time. Idempotent-safe: a running
   // player is stopped and reseeded (used for seek).
   start(doc: SubtitleDocument, startTimeMs: number): void {
+    const restarting = this.doc !== null;
     this.stop();
+    if (restarting) this.deps.onSeek?.();
     this.doc = doc;
     this.baseTimeMs = startTimeMs;
     this.lastTimeMs = startTimeMs;
     this.productionCursor = 0;
+    this.productionFloor = 0;
     this.displayCursor = -1;
     this.clearBuffer();
     this.vsyncCount = 0;
     this.lastProducedAt = -1;
     this.lastTickTs = -1;
     this.lastPresentTs = -1;
+    this.stride = 1;
+    this.refreshMs = 1000 / 60;
+    this.prodIntervalEma = 1000 / 60;
+    this.achievedFps = 0;
+    this.renderCapabilityEma = 50;
+    this.strideTargetLast = 1;
+    this.strideTargetStreak = 0;
+    this.bufferFedStreak = 0;
+    this.produced = 0;
+    this.presented = 0;
+    this.holds = 0;
+    this.lastCompositeMs = 0;
+    this.presentIntervals.length = 0;
+    this.presentIntervalPos = 0;
+    this.renderSamples.length = 0;
+    this.renderPos = 0;
+    this.compositeSamples.length = 0;
+    this.compositePos = 0;
     this.running = true;
     const myEpoch = ++this.epoch;
     void this.runProducer(myEpoch);
@@ -271,12 +293,17 @@ export class RenderAheadPlayer<T = RenderResult> {
       } catch (err) {
         deps.onError?.(err);
         // Skip this index so the display loop does not wait on it forever.
-        this.productionCursor = i + 1;
+        this.productionCursor = Math.max(i + 1, this.productionFloor);
         continue;
       }
       if (!this.running || this.epoch !== epoch) {
         this.releaseFrame({ result, timeMs: t, frameIndex: i });
         break;
+      }
+      if (i < this.productionFloor) {
+        this.releaseFrame({ result, timeMs: t, frameIndex: i });
+        this.productionCursor = Math.max(this.productionCursor, this.productionFloor);
+        continue;
       }
       const renderMs = deps.now() - t0;
       this.pushSample(this.renderSamples, "renderPos", renderMs);
@@ -296,10 +323,10 @@ export class RenderAheadPlayer<T = RenderResult> {
   // --- Display loop ---------------------------------------------------------
 
   private scheduleDisplay(epoch: number): void {
-    this.deps.requestFrame((ts) => this.displayTick(ts, epoch));
+    this.deps.requestFrame((ts, mediaTimeMs) => this.displayTick(ts, epoch, mediaTimeMs));
   }
 
-  private displayTick(ts: number, epoch: number): void {
+  private displayTick(ts: number, epoch: number, mediaTimeMs?: number): void {
     if (!this.running || this.epoch !== epoch) return;
     this.scheduleDisplay(epoch);
 
@@ -309,6 +336,14 @@ export class RenderAheadPlayer<T = RenderResult> {
       if (d > 4 && d < 100) this.refreshMs += (d - this.refreshMs) * REFRESH_ALPHA;
     }
     this.lastTickTs = ts;
+
+    // An attached media element owns the playback clock. Select the frame for
+    // its actual media timestamp and discard obsolete buffered frames instead
+    // of slowing subtitle time when rendering cannot sustain every grid point.
+    if (mediaTimeMs !== undefined && Number.isFinite(mediaTimeMs)) {
+      this.displayMediaClockFrame(ts, mediaTimeMs);
+      return;
+    }
 
     // Startup: hold the first present until the buffer has pre-filled, so a heavy
     // opening frame is absorbed rather than stalling the display into a hitch. Once
@@ -348,13 +383,53 @@ export class RenderAheadPlayer<T = RenderResult> {
     }
 
     this.vsyncCount = 0;
+    this.presentBufferedFrame(ts, nextI, frame);
+  }
+
+  private displayMediaClockFrame(ts: number, mediaTimeMs: number): void {
+    const desired = Math.max(
+      0,
+      Math.round((mediaTimeMs - this.baseTimeMs) / this.frameStepMs),
+    );
+    if (desired <= this.displayCursor) return;
+
+    if (desired > this.productionFloor) {
+      this.productionFloor = desired;
+      if (this.productionCursor < desired) this.productionCursor = desired;
+    }
+
+    for (const [index, buffered] of this.buffer) {
+      if (index >= desired) continue;
+      this.buffer.delete(index);
+      this.releaseFrame(buffered);
+    }
+
+    const frame = this.buffer.get(desired);
+    if (!frame) {
+      this.holds++;
+      // The external clock has made every earlier grid point obsolete. Move
+      // the consumption floor with it so the bounded-lookahead gate permits
+      // the producer to render `desired` immediately.
+      this.displayCursor = desired - 1;
+      this.wakeProducer();
+      return;
+    }
+    this.vsyncCount = 0;
+    this.presentBufferedFrame(ts, desired, frame);
+  }
+
+  private presentBufferedFrame(
+    ts: number,
+    index: number,
+    frame: BufferedFrame<T>,
+  ): void {
     const c0 = this.deps.now();
     this.deps.present(frame);
     this.lastCompositeMs = this.deps.now() - c0;
     this.pushSample(this.compositeSamples, "compositePos", this.lastCompositeMs);
 
-    this.buffer.delete(nextI);
-    this.displayCursor = nextI;
+    this.buffer.delete(index);
+    this.displayCursor = index;
     this.lastTimeMs = frame.timeMs;
     this.presented++;
     this.wakeProducer();

@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "subforge/core": ["./node_modules/subforge/src/core/types.ts"],
+      "subforge/ass": ["./types/subforge-ass.d.ts"]
+    }
+  }
+}

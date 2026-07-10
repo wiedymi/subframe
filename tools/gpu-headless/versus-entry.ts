@@ -2,8 +2,6 @@ import JASSUB from "jassub";
 import { parseASS } from "subforge/ass";
 import type { SubtitleDocument } from "subforge/core";
 import {
-  clearEventLayerCache,
-  clearRasterCaches,
   createWebGPUBackend,
   attachDocument,
   registerFontSource,
@@ -14,6 +12,7 @@ import {
   setWorkerSource,
   type CompositorBackend,
 } from "../../src";
+import { clearEventLayerCache, clearRasterCaches } from "../../src/core/pipeline";
 import { getFramePipelineStats, resetFramePipeline, setFrameHybrid, setFrameScatter } from "../../src/core/pipeline";
 import { setWorkerCount } from "../../src/core/worker-pool";
 

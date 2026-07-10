@@ -1,5 +1,8 @@
 import { getFont } from "./cache";
-import { resolveFontPathsForCodepoint } from "./resolve";
+import {
+  resolveFontPathForCodepoint,
+  resolveFontPathsForCodepoint,
+} from "./resolve";
 import { getScript, isComplexScript, Tags } from "text-shaper";
 
 const codepointCache = new Map<string, string | null>();
@@ -34,7 +37,6 @@ export async function getFallbackFontForCodepoint(
   if (preferComplex) {
     candidates = resolveFontPathsForCodepoint(fontName, codepoint, bold, italic);
   } else {
-    const { resolveFontPathForCodepoint } = await import("./resolve");
     path = resolveFontPathForCodepoint(fontName, codepoint, bold, italic);
   }
 

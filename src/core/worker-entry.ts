@@ -326,7 +326,7 @@ function releasePackedFrameLocalBitmaps(layers: BitmapLayer[]): void {
   // packFrameArena has already copied every source mask the main thread will
   // ever read. Only buffers explicitly marked by the frame-arena render path are
   // returned here; cached/shared clip/event-layer buffers are never marked.
-  const released = new Set<ArrayBuffer>();
+  const released = new Set<ArrayBufferLike>();
   const release = (buf: Uint8Array | undefined): void => {
     if (!buf || buf.length === 0 || released.has(buf.buffer)) return;
     if (releaseFrameLocalBitmapBuffer(buf)) released.add(buf.buffer);
@@ -782,7 +782,15 @@ scope.onmessage = (event: MessageEvent): void => {
         const s = msg.fontSources[i]!;
         registerFontSource(s.name, s.source);
       }
-      if (msg.resultPort) resultTarget = msg.resultPort;
+      if (msg.resultPort) {
+        const port = msg.resultPort;
+        resultTarget = {
+          postMessage(message, transfer) {
+            if (transfer) port.postMessage(message, transfer);
+            else port.postMessage(message);
+          },
+        };
+      }
       // Phase-seed the periodic cache backstop from this worker's pool slot so
       // the pool never sheds on every worker on the same frame (staggered).
       seedBackstopPhase(

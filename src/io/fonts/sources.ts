@@ -12,7 +12,7 @@ export type RegisteredFontInfo = {
 };
 
 function toArrayBuffer(view: Uint8Array): ArrayBuffer {
-  return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+  return view.slice().buffer;
 }
 
 export async function fontInputToBytes(input: SubframeFontInput): Promise<ArrayBuffer> {

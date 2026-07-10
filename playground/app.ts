@@ -8,17 +8,8 @@ import {
   registerFontSource,
   resetFontCache,
   setFontResolver,
-  buildLocalFontIndex,
-  getLocalFontBuffer,
-  resolveBestLocalFontEntry,
-  sanitizeFontName,
   createWebGLBackend,
   createWebGPUBackend,
-  getEventLayerCacheStats,
-  clearEventLayerCache,
-  clearRasterCaches,
-  setGpuFilterProvider,
-  getGpuFilterProvider,
   getMemoryStats,
   setWorkerSource,
   getFramePipelineStats,
@@ -27,6 +18,21 @@ import {
   type CompositorBackend,
   type SubframeFrame,
 } from "../src";
+import {
+  buildLocalFontIndex,
+  getLocalFontBuffer,
+  resolveBestLocalFontEntry,
+  sanitizeFontName,
+} from "../src/io/fonts/local-access";
+import {
+  clearEventLayerCache,
+  clearRasterCaches,
+  getEventLayerCacheStats,
+} from "../src/core/pipeline";
+import {
+  getGpuFilterProvider,
+  setGpuFilterProvider,
+} from "../src/core/filters/gpu-provider";
 import { RenderAheadPlayer, type BufferedFrame, type RenderAheadStats } from "../src/player/render-ahead";
 import type { BitmapLayer } from "../src/core/data/types";
 import { libassGaussianBlur } from "../src/core/libass_blur";
@@ -1825,7 +1831,7 @@ function init() {
   }
 
   on(window, "resize", resizeCanvas);
-  on(document, "keydown", onKeyDown);
+  on(document, "keydown", onKeyDown as EventListener);
 
   let resizeObserver: ResizeObserver | null = null;
   if (typeof ResizeObserver !== "undefined") {

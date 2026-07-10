@@ -80,6 +80,7 @@ export type TraceLayer = {
   scaleYFactor: number;
   syntheticBold: boolean;
   syntheticItalic: boolean;
+  fontHintingSupported: boolean;
   underline: boolean;
   strikeout: boolean;
   isDrawing: boolean;

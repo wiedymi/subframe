@@ -65,9 +65,9 @@ export function frameContextFromDocument(
     timeMs,
     width: w,
     height: h,
-    marginL: doc.info.marginL ?? 0,
-    marginR: doc.info.marginR ?? 0,
-    marginV: doc.info.marginV ?? 0,
+    marginL: 0,
+    marginR: 0,
+    marginV: 0,
     wrapStyle: doc.info.wrapStyle ?? 0,
   };
 }

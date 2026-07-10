@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
-    "types": ["bun", "@webgpu/types"],
+    "types": ["bun"],
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
@@ -12,6 +12,6 @@
     "isolatedModules": true,
     "resolveJsonModule": true
   },
-  "include": ["src", "playground", "tools", "test"],
+  "include": ["src", "playground", "tools", "test", "types"],
   "exclude": ["node_modules", "refs", "dist"]
 }

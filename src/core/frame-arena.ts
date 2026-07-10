@@ -243,7 +243,12 @@ export async function renderFrameToLayers(
 // so a stable sort of the merged layer set by ordinal reconstructs the exact
 // single-thread insertion order (frame-arena.mergeScatterLayers) before the
 // global z-sort.
-export type SubsetLayers = { layers: BitmapLayer[]; ordinals: Int32Array };
+export type SubsetLayers = {
+  layers: BitmapLayer[];
+  ordinals: Int32Array;
+  staticOrdinals: Int32Array;
+  nonStaticOrdinals: Int32Array;
+};
 
 // Per-event warm render cost measured while rendering a subset: `costOrdinals[j]`
 // is the event ordinal (position in activeEventsAtTime) and `costMs[j]` the ms it
@@ -397,14 +402,8 @@ function copyTight(
 // sign frame drops from ~930MB (per-layer clip copies) to <10MB. Deduping is
 // safe because a shared object with identical dims is byte-identical content;
 // per-layer color/origin stay in the metadata, so tinted reuse is preserved.
-export function packFrameArena(layers: BitmapLayer[]): {
-  arena: ArenaBuffer;
-  meta: Float64Array;
-  count: number;
-  reused: boolean;
-  sabSlotIdx?: number;
-};
 type ArenaAcquireResult = { buffer: ArenaBuffer; reused: boolean; sabSlotIdx?: number };
+
 export function packFrameArena(
   layers: BitmapLayer[],
   acquireArena?: (minBytes: number) => ArenaAcquireResult | null,

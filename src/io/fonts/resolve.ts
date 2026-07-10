@@ -64,10 +64,10 @@ function requireNodeModules(): NodeModules {
 function getMacFontDirs(): string[] {
   const { path, os } = requireNodeModules();
   return [
-    path.join(os.homedir(), "Library", "Fonts"),
-    "/Library/Fonts",
-    "/System/Library/Fonts",
     "/System/Library/Fonts/Supplemental",
+    "/System/Library/Fonts",
+    "/Library/Fonts",
+    path.join(os.homedir(), "Library", "Fonts"),
   ];
 }
 
@@ -132,7 +132,11 @@ function findPingFangScIndex(path: string): number | null {
   let buffer: ArrayBuffer;
   try {
     const file = fs.readFileSync(path);
-    buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
+    buffer = new Uint8Array(
+      file.buffer,
+      file.byteOffset,
+      file.byteLength,
+    ).slice().buffer;
   } catch {
     macPingFangIndex = null;
     return null;

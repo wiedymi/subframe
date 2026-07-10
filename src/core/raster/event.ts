@@ -12,7 +12,7 @@ import {
   getFillRuleFromFlags,
   rasterizePath,
 } from "text-shaper";
-import type { RasterizedGlyph } from "text-shaper";
+import type { Matrix3x3, RasterizedGlyph } from "text-shaper";
 import { quantSubpixel, SUBPIXEL_SCALE } from "../math/fixed";
 import type { ClipShape } from "../tags/types";
 import type { Line, LineItem } from "../layout/line";
@@ -1504,30 +1504,8 @@ function rasterizeOutlineFromPath(
 }
 
 function cloneRasterGlyph(
-  glyph: {
-    bitmap: {
-      buffer: Uint8Array;
-      width: number;
-      rows: number;
-      pitch: number;
-      pixelMode?: PixelMode;
-      numGrays?: number;
-    };
-    bearingX: number;
-    bearingY: number;
-  },
-): {
-  bitmap: {
-    buffer: Uint8Array;
-    width: number;
-    rows: number;
-    pitch: number;
-    pixelMode?: PixelMode;
-    numGrays?: number;
-  };
-  bearingX: number;
-  bearingY: number;
-} {
+  glyph: RasterizedGlyph,
+): RasterizedGlyph {
   const bm = glyph.bitmap;
   if ((globalThis as any).__SUBFRAME_ALLOC_CENSUS__)
     recordAllocCensus("cloneRasterGlyph.slice", bm.buffer.length);
@@ -1676,18 +1654,7 @@ export function renderEventLines(input: RenderLinesInput): void {
   let gpuDeferVariant: "none" | "shadow" | "both" | "fillonly" | null = null;
   let gpuDeferBlurFill = false;
 
-  type PhantomBase = {
-    bitmap: {
-      buffer: Uint8Array;
-      width: number;
-      rows: number;
-      pitch: number;
-      pixelMode: PixelMode;
-      numGrays?: number;
-    };
-    bearingX: number;
-    bearingY: number;
-  };
+  type PhantomBase = RasterizedGlyph;
   const gpuPhantomGlyph = (
     base: PhantomBase,
     sigmaX: number,
@@ -2479,7 +2446,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 matrix = qDraw.m;
               }
             }
-            builder = builder.perspective(matrix);
+            builder = builder.perspective(matrix as Matrix3x3);
           }
           // libass stores ASS drawings as OUTLINE_DRAWING and then feeds them
           // through the same glyph bitmap path as text (ass_render.c
@@ -3626,7 +3593,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 }
               : undefined;
             const glyphPath = fillMatrixFinal
-              ? basePath.perspective(flipYMatrix3(fillMatrixFinal))
+              ? basePath.perspective(flipYMatrix3(fillMatrixFinal) as Matrix3x3)
               : basePath;
             // Pool a raster only when it is provably private (rasterKey===null),
             // has no be-blur padding (pad===0, so the raster IS the direct
@@ -3637,7 +3604,7 @@ export function renderEventLines(input: RenderLinesInput): void {
             // releases it after that copy. Cache/shared rasters are excluded.
             const rasterPoolable =
               rasterKey === null &&
-              (!gpuProvider || poolFrameLocalBitmaps) &&
+              (!gpuProvider || poolFrameLocalBitmaps === true) &&
               bePadding(item.edgeBlur) === 0 &&
               (item.blurSigmaX > 0 || item.blurSigmaY > 0);
             poolFillRaster =
@@ -3670,7 +3637,7 @@ export function renderEventLines(input: RenderLinesInput): void {
                 poolOutlineRaster = rasterPoolable;
                 outlineRaster = rasterizeFillFromPath(
                   strokeMatrixFinal
-                    ? strokePath.perspective(flipYMatrix3(strokeMatrixFinal))
+                    ? strokePath.perspective(flipYMatrix3(strokeMatrixFinal) as Matrix3x3)
                     : strokePath,
                   true,
                   FillRule.NonZero,
