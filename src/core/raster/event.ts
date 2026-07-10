@@ -1,21 +1,48 @@
 import type { SubtitleEvent } from "subforge/core";
-import type { FrameContext, BitmapLayer, ColorRGBA } from "../data/types";
-import type { TraceEvent, TraceLayer, TraceLine } from "../trace";
-import { pushTraceGlyph, pushTraceLine } from "../trace";
+import type { Matrix3x3, RasterizedGlyph } from "text-shaper";
 import {
   BitmapBuilder,
+  computeControlBox,
+  createBitmap,
   FillRule,
+  getFillRuleFromFlags,
   PathBuilder,
   PixelMode,
-  createBitmap,
-  computeControlBox,
-  getFillRuleFromFlags,
   rasterizePath,
 } from "text-shaper";
-import type { Matrix3x3, RasterizedGlyph } from "text-shaper";
-import { quantSubpixel, SUBPIXEL_SCALE } from "../math/fixed";
-import type { ClipShape } from "../tags/types";
+import { applyAnimateColors } from "../animate/apply";
+import {
+  applyFade,
+  fadeFactorComplex,
+  fadeFactorSimple,
+} from "../animate/fade";
+import { applyClip } from "../clip/apply";
+import {
+  clearClipMaskCache,
+  getClipMaskCacheStats,
+  setClipMaskCacheLimit,
+} from "../clip/parser";
+import type {
+  BitmapLayer,
+  ColorRGBA,
+  FrameContext,
+  GpuFilterDesc,
+  GpuFilterSource,
+} from "../data/types";
+import {
+  applyBeBlur,
+  applyLibassGaussianBlur,
+  bePadding,
+  quantizeBlur,
+  quantizeShadowOffset,
+  quantizeTransformPos,
+} from "../filters/blur";
+import {
+  getGpuFilterProvider,
+  isGpuFilterDeferEnabled,
+} from "../filters/gpu-provider";
 import type { Line, LineItem } from "../layout/line";
+import { quantSubpixel, SUBPIXEL_SCALE } from "../math/fixed";
 import {
   acquireBitmapBuffer,
   addBitmapClamped,
@@ -29,25 +56,12 @@ import {
   splitSubpixel,
   subBitmapClamped,
 } from "../raster/bitmap";
-import {
-  applyBeBlur,
-  applyLibassGaussianBlur,
-  bePadding,
-  quantizeBlur,
-  quantizeShadowOffset,
-  quantizeTransformPos,
-} from "../filters/blur";
-import { getGpuFilterProvider, isGpuFilterDeferEnabled } from "../filters/gpu-provider";
-import type { GpuFilterSource, GpuFilterDesc } from "../data/types";
-import { applyClip } from "../clip/apply";
-import {
-  clearClipMaskCache,
-  getClipMaskCacheStats,
-  setClipMaskCacheLimit,
-} from "../clip/parser";
-import { applyAnimateColors } from "../animate/apply";
-import { applyFade, fadeFactorComplex, fadeFactorSimple } from "../animate/fade";
+import type { ClipShape } from "../tags/types";
+import type { TraceEvent, TraceLayer, TraceLine } from "../trace";
+import { pushTraceGlyph, pushTraceLine } from "../trace";
+import { getFontSizingMetrics } from "../style/font";
 import { itemRotateOrShear } from "../transform/affine";
+import type { PathCbox } from "../transform/matrix";
 import {
   buildTransformMatrix,
   flipYMatrix3,
@@ -55,15 +69,9 @@ import {
   restoreTransform,
   translateProjective,
 } from "../transform/matrix";
-import type { PathCbox } from "../transform/matrix";
 
 export type CacheLayerRole =
-  | "fillSolid"
-  | "fillPrimary"
-  | "fillSecondary"
-  | "outline"
-  | "shadow"
-  | "box";
+  "fillSolid" | "fillPrimary" | "fillSecondary" | "outline" | "shadow" | "box";
 
 export type CacheLayerTemplate = {
   lineIndex: number;
@@ -99,8 +107,14 @@ const OUTLINE_BIAS = 0.0;
 // glyph set.
 let GLYPH_RASTER_CACHE_LIMIT = 768;
 const GLYPH_RASTER_KEY_SCALE = 1e4;
-let glyphFillCache = new WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>();
-let glyphOutlineCache = new WeakMap<LineItem["font"], Map<string, RasterizedGlyph>>();
+let glyphFillCache = new WeakMap<
+  LineItem["font"],
+  Map<string, RasterizedGlyph>
+>();
+let glyphOutlineCache = new WeakMap<
+  LineItem["font"],
+  Map<string, RasterizedGlyph>
+>();
 let COMBINED_RASTER_CACHE_LIMIT = 256;
 let combinedRasterCache = new WeakMap<
   LineItem["font"],
@@ -127,7 +141,10 @@ let combinedRasterCache = new WeakMap<
 // per-glyph path.
 const rasterCacheFonts = new Set<LineItem["font"]>();
 
-function quantKey(value: number, scale: number = GLYPH_RASTER_KEY_SCALE): number {
+function quantKey(
+  value: number,
+  scale: number = GLYPH_RASTER_KEY_SCALE,
+): number {
   return Math.round(value * scale);
 }
 
@@ -233,7 +250,14 @@ function combinedCacheKey(
 function getCombinedCache(
   font: LineItem["font"],
   key: string,
-): { fg: RasterizedGlyph; og: RasterizedGlyph | null; sg: ReturnType<typeof cloneRasterGlyph> | null; offsetX: number; offsetY: number; pad: number } | null {
+): {
+  fg: RasterizedGlyph;
+  og: RasterizedGlyph | null;
+  sg: ReturnType<typeof cloneRasterGlyph> | null;
+  offsetX: number;
+  offsetY: number;
+  pad: number;
+} | null {
   const map = combinedRasterCache.get(font);
   if (!map) return null;
   const value = map.get(key) ?? null;
@@ -247,7 +271,14 @@ function getCombinedCache(
 function setCombinedCache(
   font: LineItem["font"],
   key: string,
-  value: { fg: RasterizedGlyph; og: RasterizedGlyph | null; sg: ReturnType<typeof cloneRasterGlyph> | null; offsetX: number; offsetY: number; pad: number },
+  value: {
+    fg: RasterizedGlyph;
+    og: RasterizedGlyph | null;
+    sg: ReturnType<typeof cloneRasterGlyph> | null;
+    offsetX: number;
+    offsetY: number;
+    pad: number;
+  },
 ): void {
   let map = combinedRasterCache.get(font);
   if (!map) {
@@ -261,7 +292,6 @@ function setCombinedCache(
     if (!first.done) map.delete(first.value);
   }
 }
-
 
 // Filtered drawing bitmaps keyed by content (path text, scale, border, blur,
 // fill-in flags). Position-independent: bearings are stored, offsets are
@@ -336,7 +366,11 @@ let transformGlyphWindowHits = 0;
 let transformGlyphSleepRemaining = 0;
 
 function transformGlyphCacheEngaged(): boolean {
-  if (TRANSFORM_GLYPH_CACHE_LIMIT <= 0 || TRANSFORM_GLYPH_CACHE_BYTES_LIMIT <= 0) return false;
+  if (
+    TRANSFORM_GLYPH_CACHE_LIMIT <= 0 ||
+    TRANSFORM_GLYPH_CACHE_BYTES_LIMIT <= 0
+  )
+    return false;
   if (transformGlyphSleepRemaining > 0) {
     transformGlyphSleepRemaining--;
     return false;
@@ -402,7 +436,11 @@ function setTransformGlyphCache(
   fg: ReturnType<typeof cloneRasterGlyph>,
   og: ReturnType<typeof cloneRasterGlyph> | null,
 ): void {
-  if (TRANSFORM_GLYPH_CACHE_LIMIT <= 0 || TRANSFORM_GLYPH_CACHE_BYTES_LIMIT <= 0) return;
+  if (
+    TRANSFORM_GLYPH_CACHE_LIMIT <= 0 ||
+    TRANSFORM_GLYPH_CACHE_BYTES_LIMIT <= 0
+  )
+    return;
   const existing = TRANSFORM_GLYPH_CACHE.get(key);
   if (existing) {
     transformGlyphCacheBytes -= existing.bytes;
@@ -443,10 +481,7 @@ export function setRasterCacheLimits(limits: {
     setClipMaskCacheLimit(limits.clipMaskBytes);
   if (limits.postFilterBytes !== undefined) {
     SHIFT_CACHE_BYTES_LIMIT = Math.max(0, limits.postFilterBytes);
-    while (
-      SHIFT_CACHE.size > 0 &&
-      shiftCacheBytes > SHIFT_CACHE_BYTES_LIMIT
-    ) {
+    while (SHIFT_CACHE.size > 0 && shiftCacheBytes > SHIFT_CACHE_BYTES_LIMIT) {
       const first = SHIFT_CACHE.keys().next();
       if (first.done) break;
       const removed = SHIFT_CACHE.get(first.value);
@@ -454,10 +489,14 @@ export function setRasterCacheLimits(limits: {
       SHIFT_CACHE.delete(first.value);
     }
   }
-  if (limits.glyph !== undefined) GLYPH_RASTER_CACHE_LIMIT = Math.max(0, limits.glyph);
-  if (limits.combined !== undefined) COMBINED_RASTER_CACHE_LIMIT = Math.max(0, limits.combined);
-  if (limits.drawing !== undefined) DRAWING_RASTER_CACHE_LIMIT = Math.max(0, limits.drawing);
-  if (limits.path !== undefined) GLYPH_PATH_CACHE_LIMIT = Math.max(0, limits.path);
+  if (limits.glyph !== undefined)
+    GLYPH_RASTER_CACHE_LIMIT = Math.max(0, limits.glyph);
+  if (limits.combined !== undefined)
+    COMBINED_RASTER_CACHE_LIMIT = Math.max(0, limits.combined);
+  if (limits.drawing !== undefined)
+    DRAWING_RASTER_CACHE_LIMIT = Math.max(0, limits.drawing);
+  if (limits.path !== undefined)
+    GLYPH_PATH_CACHE_LIMIT = Math.max(0, limits.path);
   if (limits.transform !== undefined)
     TRANSFORM_GLYPH_CACHE_LIMIT = TRANSFORM_GLYPH_CACHE_ENV_ENABLED
       ? Math.max(0, limits.transform)
@@ -581,7 +620,10 @@ export function trimRasterCaches(fraction: number): void {
   for (const font of rasterCacheFonts) {
     trimFontMap(glyphFillCache.get(font), f);
     trimFontMap(glyphOutlineCache.get(font), f);
-    trimFontMap(combinedRasterCache.get(font) as Map<unknown, unknown> | undefined, f);
+    trimFontMap(
+      combinedRasterCache.get(font) as Map<unknown, unknown> | undefined,
+      f,
+    );
     trimFontMap(glyphFillPathCache.get(font), f);
     trimFontMap(glyphStrokePathCache.get(font), f);
   }
@@ -651,7 +693,8 @@ function drawingRasterEntryBytes(entry: {
   sg: ReturnType<typeof cloneRasterGlyph> | null;
 }): number {
   let total = entry.fg.bitmap.buffer.byteLength;
-  if (entry.og && entry.og !== entry.fg) total += entry.og.bitmap.buffer.byteLength;
+  if (entry.og && entry.og !== entry.fg)
+    total += entry.og.bitmap.buffer.byteLength;
   if (entry.sg && entry.sg !== entry.og && entry.sg !== entry.fg)
     total += entry.sg.bitmap.buffer.byteLength;
   return total;
@@ -907,12 +950,22 @@ function quantizeDeviceMatrix(
   padX: number,
   padY: number,
   runDelta: { x: number; y: number } | null,
-): { m: number[][]; residualX: number; residualY: number } | null {
+): {
+  m: number[][];
+  relativeM: number[][];
+  posX: number;
+  posY: number;
+  residualX: number;
+  residualY: number;
+} | null {
   const res = quantizeTransform(matrix, cbox, runDelta, padX, padY);
   if (!res) return null;
   const restored = restoreTransform(res.q, cbox, padX, padY);
   return {
     m: translateProjective(restored, res.q.posX, res.q.posY),
+    relativeM: restored,
+    posX: res.q.posX,
+    posY: res.q.posY,
     residualX: res.residualX,
     residualY: res.residualY,
   };
@@ -936,7 +989,17 @@ function applySyntheticPathEffects(
   return out;
 }
 
-function quantizePathInPlace(path: { commands: Array<any>; bounds?: any }): void {
+function roundHalfEven(value: number): number {
+  const rounded = Math.round(value);
+  return Math.abs(value % 1) === 0.5 && rounded % 2 !== 0
+    ? rounded - 1
+    : rounded;
+}
+
+function quantizePathInPlace(path: {
+  commands: Array<any>;
+  bounds?: any;
+}): void {
   const cmds = path.commands;
   // SUBPIXEL_SCALE is a power of two, so multiplying by the exact reciprocal
   // is bit-identical to dividing (only the exponent changes). Constants are
@@ -949,22 +1012,22 @@ function quantizePathInPlace(path: { commands: Array<any>; bounds?: any }): void
     switch (cmd.type) {
       case "M":
       case "L":
-        cmd.x = Math.round(cmd.x * s) * inv;
-        cmd.y = Math.round(cmd.y * s) * inv;
+        cmd.x = roundHalfEven(cmd.x * s) * inv;
+        cmd.y = roundHalfEven(cmd.y * s) * inv;
         break;
       case "Q":
-        cmd.x1 = Math.round(cmd.x1 * s) * inv;
-        cmd.y1 = Math.round(cmd.y1 * s) * inv;
-        cmd.x = Math.round(cmd.x * s) * inv;
-        cmd.y = Math.round(cmd.y * s) * inv;
+        cmd.x1 = roundHalfEven(cmd.x1 * s) * inv;
+        cmd.y1 = roundHalfEven(cmd.y1 * s) * inv;
+        cmd.x = roundHalfEven(cmd.x * s) * inv;
+        cmd.y = roundHalfEven(cmd.y * s) * inv;
         break;
       case "C":
-        cmd.x1 = Math.round(cmd.x1 * s) * inv;
-        cmd.y1 = Math.round(cmd.y1 * s) * inv;
-        cmd.x2 = Math.round(cmd.x2 * s) * inv;
-        cmd.y2 = Math.round(cmd.y2 * s) * inv;
-        cmd.x = Math.round(cmd.x * s) * inv;
-        cmd.y = Math.round(cmd.y * s) * inv;
+        cmd.x1 = roundHalfEven(cmd.x1 * s) * inv;
+        cmd.y1 = roundHalfEven(cmd.y1 * s) * inv;
+        cmd.x2 = roundHalfEven(cmd.x2 * s) * inv;
+        cmd.y2 = roundHalfEven(cmd.y2 * s) * inv;
+        cmd.x = roundHalfEven(cmd.x * s) * inv;
+        cmd.y = roundHalfEven(cmd.y * s) * inv;
         break;
       default:
         break;
@@ -981,9 +1044,19 @@ function buildGlyphPath(
   italic: boolean,
   boldStrength: number,
 ): PathBuilder | null {
-  let builder = PathBuilder.fromGlyph(font, glyphId);
+  const masterSize = 256;
+  const realDimension = getFontSizingMetrics(font).height;
+  let builder = PathBuilder.fromGlyphAtSize(
+    font,
+    glyphId,
+    masterSize,
+    "freetype-real-dim",
+  );
   if (!builder) return null;
-  builder = builder.scale(scaleX, scaleY);
+  builder = builder.scale(
+    (scaleX * realDimension) / masterSize,
+    (scaleY * realDimension) / masterSize,
+  );
   builder = applySyntheticPathEffects(builder, italic, boldStrength);
   return builder;
 }
@@ -993,8 +1066,14 @@ function buildGlyphPath(
 // outline and applies transform_3d afterwards, ass_render.c), so only the
 // perspective + rasterization runs per frame.
 let GLYPH_PATH_CACHE_LIMIT = 2048;
-let glyphFillPathCache = new WeakMap<LineItem["font"], Map<string, PathBuilder | null>>();
-let glyphStrokePathCache = new WeakMap<LineItem["font"], Map<string, PathBuilder | null>>();
+let glyphFillPathCache = new WeakMap<
+  LineItem["font"],
+  Map<string, PathBuilder | null>
+>();
+let glyphStrokePathCache = new WeakMap<
+  LineItem["font"],
+  Map<string, PathBuilder | null>
+>();
 
 function getPathCache<T>(
   store: WeakMap<LineItem["font"], Map<string, T | null>>,
@@ -1040,7 +1119,14 @@ function getCachedGlyphFillPath(
   const key = fillCacheKey(glyphId, scaleX, scaleY, italic, boldStrength);
   const cached = getPathCache(glyphFillPathCache, font, key);
   if (cached !== undefined) return cached;
-  const built = buildGlyphPath(font, glyphId, scaleX, scaleY, italic, boldStrength);
+  const built = buildGlyphPath(
+    font,
+    glyphId,
+    scaleX,
+    scaleY,
+    italic,
+    boldStrength,
+  );
   setPathCache(glyphFillPathCache, font, key, built);
   return built;
 }
@@ -1192,7 +1278,13 @@ function classifyStrokeContour(
   const step = Math.max(1, Math.floor(cmds.length / 8));
   for (let i = 0; i < cmds.length && total < 9; i += step) {
     const cmd = cmds[i]!;
-    if (cmd.type !== "M" && cmd.type !== "L" && cmd.type !== "Q" && cmd.type !== "C") continue;
+    if (
+      cmd.type !== "M" &&
+      cmd.type !== "L" &&
+      cmd.type !== "Q" &&
+      cmd.type !== "C"
+    )
+      continue;
     total++;
     if (windingAt(basePolys, cmd.x, cmd.y) !== 0) insideGlyph++;
     else if (windingAt(outerPolys, cmd.x, cmd.y) !== 0) insideOuter++;
@@ -1248,7 +1340,11 @@ function flattenPathToPolylines(path: {
   return polys;
 }
 
-function windingAt(polys: Array<Array<number>>, px: number, py: number): number {
+function windingAt(
+  polys: Array<Array<number>>,
+  px: number,
+  py: number,
+): number {
   let winding = 0;
   for (let p = 0; p < polys.length; p++) {
     const poly = polys[p]!;
@@ -1262,7 +1358,10 @@ function windingAt(polys: Array<Array<number>>, px: number, py: number): number 
         if (y1 > py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) > 0) {
           winding++;
         }
-      } else if (y1 <= py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0) {
+      } else if (
+        y1 <= py &&
+        (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0
+      ) {
         winding--;
       }
       x0 = x1;
@@ -1271,7 +1370,6 @@ function windingAt(polys: Array<Array<number>>, px: number, py: number): number 
   }
   return winding;
 }
-
 
 function getCachedGlyphStrokePath(
   font: LineItem["font"],
@@ -1381,6 +1479,7 @@ function rasterizeFillFromPath(
     pixelMode: PixelMode.Gray,
     fillRule,
     flipY,
+    rasterizer: fillRule === FillRule.NonZero ? "libass" : "freetype",
     out,
   });
   if (!poolOut && (globalThis as any).__SUBFRAME_ALLOC_CENSUS__)
@@ -1392,7 +1491,10 @@ function rasterizeFillFromPath(
   };
 }
 
-function splitPathContours(path: { commands: Array<any>; flags?: number }): Array<{ commands: Array<any>; flags?: number }> {
+function splitPathContours(path: {
+  commands: Array<any>;
+  flags?: number;
+}): Array<{ commands: Array<any>; flags?: number }> {
   const contours: Array<{ commands: Array<any>; flags?: number }> = [];
   let current: Array<any> = [];
   for (let i = 0; i < path.commands.length; i++) {
@@ -1500,12 +1602,16 @@ function rasterizeOutlineFromPath(
 ): RasterizedGlyph | null {
   const stroked = strokeOutlinePath(builder, borderX, borderY);
   if (!stroked) return null;
-  return rasterizeFillFromPath(stroked, flipY, FillRule.NonZero, phaseX, phaseY);
+  return rasterizeFillFromPath(
+    stroked,
+    flipY,
+    FillRule.NonZero,
+    phaseX,
+    phaseY,
+  );
 }
 
-function cloneRasterGlyph(
-  glyph: RasterizedGlyph,
-): RasterizedGlyph {
+function cloneRasterGlyph(glyph: RasterizedGlyph): RasterizedGlyph {
   const bm = glyph.bitmap;
   if ((globalThis as any).__SUBFRAME_ALLOC_CENSUS__)
     recordAllocCensus("cloneRasterGlyph.slice", bm.buffer.length);
@@ -1523,9 +1629,19 @@ function cloneRasterGlyph(
   };
 }
 
-function itemFadeFactor(item: LineItem, timeMs: number, ev: SubtitleEvent): number {
+function itemFadeFactor(
+  item: LineItem,
+  timeMs: number,
+  ev: SubtitleEvent,
+): number {
   if (item.fadeComplex) return fadeFactorComplex(timeMs, ev, item.fadeComplex);
-  if (item.fadeSimple) return fadeFactorSimple(timeMs, ev, item.fadeSimple.in, item.fadeSimple.out);
+  if (item.fadeSimple)
+    return fadeFactorSimple(
+      timeMs,
+      ev,
+      item.fadeSimple.in,
+      item.fadeSimple.out,
+    );
   return item.fadeFactor ?? 1;
 }
 
@@ -1699,7 +1815,11 @@ export function renderEventLines(input: RenderLinesInput): void {
         return "outlinePunched";
       return null;
     }
-    if (role === "fillSolid" || role === "fillPrimary" || role === "fillSecondary") {
+    if (
+      role === "fillSolid" ||
+      role === "fillPrimary" ||
+      role === "fillSecondary"
+    ) {
       return gpuDeferBlurFill ? "fill" : null;
     }
     return null;
@@ -1717,8 +1837,10 @@ export function renderEventLines(input: RenderLinesInput): void {
     const y0 = Math.round(layer.originY);
     const x1 = x0 + layer.width;
     const y1 = y0 + layer.height;
-    return Math.min(c.x1, x1) > Math.max(c.x0, x0) &&
-      Math.min(c.y1, y1) > Math.max(c.y0, y0);
+    return (
+      Math.min(c.x1, x1) > Math.max(c.x0, x0) &&
+      Math.min(c.y1, y1) > Math.max(c.y0, y0)
+    );
   };
 
   // Per-item QUALIFY predicate. Deferral is all-or-nothing for an item: once fg/og
@@ -1789,7 +1911,8 @@ export function renderEventLines(input: RenderLinesInput): void {
     // All other clips remain CPU-only.
     if (gpuDeferShared && !extraClip && gpuDeferCanCarryClip(layer.clip)) {
       const src = gpuSourceForRole(cacheRole);
-      if (src) layer.gpuFilter = { ...gpuDeferShared, source: src, sx: 0, sy: 0 };
+      if (src)
+        layer.gpuFilter = { ...gpuDeferShared, source: src, sx: 0, sy: 0 };
     }
     if (layer.gpuFilter) {
       const sp = splitSubpixel(layer.originX);
@@ -2199,10 +2322,30 @@ export function renderEventLines(input: RenderLinesInput): void {
       let secondaryBase = item.secondaryColor;
       if (item.animates.length > 0) {
         const colorState = {
-          primary: [primaryBase[0], primaryBase[1], primaryBase[2], primaryBase[3]] as ColorRGBA,
-          secondary: [secondaryBase[0], secondaryBase[1], secondaryBase[2], secondaryBase[3]] as ColorRGBA,
-          outline: [outlineBase[0], outlineBase[1], outlineBase[2], outlineBase[3]] as ColorRGBA,
-          shadow: [shadowBase[0], shadowBase[1], shadowBase[2], shadowBase[3]] as ColorRGBA,
+          primary: [
+            primaryBase[0],
+            primaryBase[1],
+            primaryBase[2],
+            primaryBase[3],
+          ] as ColorRGBA,
+          secondary: [
+            secondaryBase[0],
+            secondaryBase[1],
+            secondaryBase[2],
+            secondaryBase[3],
+          ] as ColorRGBA,
+          outline: [
+            outlineBase[0],
+            outlineBase[1],
+            outlineBase[2],
+            outlineBase[3],
+          ] as ColorRGBA,
+          shadow: [
+            shadowBase[0],
+            shadowBase[1],
+            shadowBase[2],
+            shadowBase[3],
+          ] as ColorRGBA,
         };
         applyAnimateColors(colorState, item.animates, timeMs, ev);
         primaryBase = colorState.primary;
@@ -2282,7 +2425,8 @@ export function renderEventLines(input: RenderLinesInput): void {
         continue;
       }
       if (item.isWhitespace && item.borderStyle !== 3) {
-        const shadowAny = item.shadow !== 0 || item.shadowX !== 0 || item.shadowY !== 0;
+        const shadowAny =
+          item.shadow !== 0 || item.shadowX !== 0 || item.shadowY !== 0;
         if (borderMax <= 0 && !shadowAny) {
           penX = quantSubpixel(penX + item.width + item.spacingAfter);
           continue;
@@ -2466,14 +2610,14 @@ export function renderEventLines(input: RenderLinesInput): void {
             const outlineRaster =
               !useBox && borderMax > 0
                 ? rasterizeOutlineFromPath(
-                  builder,
-                  item.borderX,
-                  item.borderY,
-                  false,
-                  phaseX,
-                  phaseY,
-                )
-              : null;
+                    builder,
+                    item.borderX,
+                    item.borderY,
+                    false,
+                    phaseX,
+                    phaseY,
+                  )
+                : null;
             const outlineBase = outlineRaster
               ? pad > 0
                 ? BitmapBuilder.adoptRasterizedGlyph(outlineRaster).pad(pad)
@@ -2499,7 +2643,8 @@ export function renderEventLines(input: RenderLinesInput): void {
                 blurSigmaX > 0 || blurSigmaY > 0
                   ? applyLibassGaussianBlur(ogBase, blurSigmaX, blurSigmaY)
                   : ogBase;
-              if (og && item.edgeBlur > 0) applyBeBlur(og.bitmap, item.edgeBlur);
+              if (og && item.edgeBlur > 0)
+                applyBeBlur(og.bitmap, item.edgeBlur);
             }
             if (og && fg && !useBox && !fillInBorder && !fillInShadow) {
               fixOutlineBitmap(
@@ -2573,7 +2718,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow", true);
+            pushLayer(
+              layer,
+              "shadow",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "shadow",
+              true,
+            );
           }
 
           if (og && karaokeOutlineEnabled) {
@@ -2588,7 +2742,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline", true);
+            pushLayer(
+              layer,
+              "outline",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "outline",
+              true,
+            );
           }
 
           const fgOriginX = px + fg.bearingX;
@@ -2608,7 +2771,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillSecondary",
+                true,
+              );
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -2621,7 +2793,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillPrimary",
+                true,
+              );
             } else {
               const leftLayer = {
                 bitmap: fg.bitmap.buffer,
@@ -2634,14 +2815,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(leftLayer, "fill", item, pad, {
-                type: "rect",
-                x0: -KARAOKE_CLIP_INF,
-                y0: -KARAOKE_CLIP_INF,
-                x1: karaokeSplitX,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillPrimary", true);
+              pushLayer(
+                leftLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: -KARAOKE_CLIP_INF,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: karaokeSplitX,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillPrimary",
+                true,
+              );
               const rightLayer = {
                 bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
@@ -2653,14 +2843,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(rightLayer, "fill", item, pad, {
-                type: "rect",
-                x0: karaokeSplitX,
-                y0: -KARAOKE_CLIP_INF,
-                x1: KARAOKE_CLIP_INF,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillSecondary", true);
+              pushLayer(
+                rightLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: karaokeSplitX,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: KARAOKE_CLIP_INF,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillSecondary",
+                true,
+              );
             }
           } else {
             const layer = {
@@ -2674,7 +2873,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid", true);
+            pushLayer(
+              layer,
+              "fill",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "fillSolid",
+              true,
+            );
           }
         }
 
@@ -2746,7 +2954,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow", true);
+              pushLayer(
+                layer,
+                "shadow",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "shadow",
+                true,
+              );
             }
           }
 
@@ -2762,7 +2979,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline", true);
+            pushLayer(
+              layer,
+              "outline",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "outline",
+              true,
+            );
           }
 
           const fgOriginX = baseOriginX + fg.bearingX;
@@ -2782,7 +3008,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillSecondary",
+                true,
+              );
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -2795,7 +3030,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillPrimary",
+                true,
+              );
             } else {
               const leftLayer = {
                 bitmap: fg.bitmap.buffer,
@@ -2808,14 +3052,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(leftLayer, "fill", item, pad, {
-                type: "rect",
-                x0: -KARAOKE_CLIP_INF,
-                y0: -KARAOKE_CLIP_INF,
-                x1: karaokeSplitX,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillPrimary", true);
+              pushLayer(
+                leftLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: -KARAOKE_CLIP_INF,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: karaokeSplitX,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillPrimary",
+                true,
+              );
               const rightLayer = {
                 bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
@@ -2827,14 +3080,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(rightLayer, "fill", item, pad, {
-                type: "rect",
-                x0: karaokeSplitX,
-                y0: -KARAOKE_CLIP_INF,
-                x1: KARAOKE_CLIP_INF,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillSecondary", true);
+              pushLayer(
+                rightLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: karaokeSplitX,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: KARAOKE_CLIP_INF,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillSecondary",
+                true,
+              );
             }
           } else {
             const layer = {
@@ -2848,7 +3110,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid", true);
+            pushLayer(
+              layer,
+              "fill",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "fillSolid",
+              true,
+            );
           }
 
           penX = quantSubpixel(penX + item.width + item.spacingAfter);
@@ -2895,79 +3166,69 @@ export function renderEventLines(input: RenderLinesInput): void {
           let gy = gyAligned;
           if (shearYAdj !== 0) {
             gy = quantSubpixel(gy + baselineShear + shearYAdj * xOffset);
-            baselineShear = quantSubpixel(
-              baselineShear + shearYAdj * xAdvance,
-            );
+            baselineShear = quantSubpixel(baselineShear + shearYAdj * xAdvance);
           }
-          gx = quantizeTransformPos(gx);
-          gy = quantizeTransformPos(gy);
-
           const useBox = item.borderStyle === 3;
           const borderMax = Math.max(item.borderX, item.borderY);
-          // libass rasterizes the outline AT the 1/8 px subpixel phase
-          // (SUBPIXEL_ORDER=3, 8 phases/axis). gx/gy are quantized to 1/8 px,
-          // so their fractional part is the phase to bake into the raster. The
-          // phase is part of the RASTER cache key (up to 8x8 = 64 variants per
-          // glyph) but NOT the path cache key (paths are phase-independent).
-          const phaseX = splitSubpixel(gx).s;
-          const phaseY = splitSubpixel(gy).s;
-          const phaseSuffix = `|${phaseX}|${phaseY}`;
-          const fillKey =
-            fillCacheKey(
-              glyphId,
-              scaleX,
-              scaleY,
-              item.syntheticItalic,
-              boldStrength,
-            ) + phaseSuffix;
-          const outlineKey =
-            !useBox && borderMax > 0
-              ? outlineCacheKey(
-                  glyphId,
-                  scaleX,
-                  scaleY,
-                  item.syntheticItalic,
-                  boldStrength,
-                  item.borderX,
-                  item.borderY,
-                ) + phaseSuffix
-              : null;
-          let fillRaster = getRasterCache(glyphFillCache, item.font, fillKey);
-          let outlineRaster =
-            outlineKey && !useBox && borderMax > 0
-              ? getRasterCache(glyphOutlineCache, item.font, outlineKey)
-              : null;
-
-          let glyphPath: PathBuilder | null = null;
-          if (!fillRaster || (!outlineRaster && outlineKey)) {
-            glyphPath = buildGlyphPath(
-              item.font,
-              glyphId,
-              scaleX,
-              scaleY,
-              item.syntheticItalic,
-              boldStrength,
-            );
-            if (!glyphPath) {
-              glyphPenX = quantSubpixel(glyphPenX + advance);
-              continue;
-            }
+          const glyphPath = buildGlyphPath(
+            item.font,
+            glyphId,
+            scaleX,
+            scaleY,
+            item.syntheticItalic,
+            boldStrength,
+          );
+          if (!glyphPath) {
+            glyphPenX = quantSubpixel(glyphPenX + advance);
+            continue;
           }
-
-          if (!fillRaster) {
-            fillRaster = glyphPath
-              ? rasterizeFillFromPath(glyphPath, true, undefined, phaseX, phaseY)
-              : null;
-            if (fillRaster) {
-              setRasterCache(glyphFillCache, item.font, fillKey, fillRaster);
-            }
+          if (item.segmentIndex !== qtRunSegment) {
+            qtRunSegment = item.segmentIndex;
+            qtRunDelta = null;
           }
+          const transformMatrix = buildTransformMatrix(
+            gx,
+            gy,
+            originX,
+            originY,
+            0,
+            0,
+            0,
+            0,
+            0,
+            item.ascent,
+            parScaleX,
+            safeBlurScaleY,
+          );
+          const padX = (item.fontSize * item.scaleXFactor) / 256;
+          const padY = (item.fontSize * item.scaleYFactor) / 256;
+          const fillCbox = getPathCboxDown(glyphPath);
+          const qFill: ReturnType<typeof quantizeDeviceMatrix> = fillCbox
+            ? quantizeDeviceMatrix(
+                transformMatrix,
+                fillCbox,
+                padX,
+                padY,
+                qtRunDelta,
+              )
+            : null;
+          if (!qFill) {
+            glyphPenX = quantSubpixel(glyphPenX + advance);
+            continue;
+          }
+          if (!qtRunDelta) {
+            qtRunDelta = { x: qFill.residualX, y: qFill.residualY };
+          }
+          const fillRaster = rasterizeFillFromPath(
+            glyphPath.perspective(flipYMatrix3(qFill.relativeM) as Matrix3x3),
+            true,
+          );
+          let outlineRaster: RasterizedGlyph | null = null;
+          let outlinePosX = qFill.posX;
+          let outlinePosY = qFill.posY;
           if (fillRaster) {
-            // Phase baked into the raster => origin is integer, no second-pass
-            // shift, and the cached bitmap is consumed read-only (addBitmap
-            // only reads src) so no per-glyph copy either.
-            const originX = gx + fillRaster.bearingX;
-            const originY = gy - fillRaster.bearingY;
+            const originX = qFill.posX + fillRaster.bearingX;
+            const originY = qFill.posY - fillRaster.bearingY;
             const sx = splitSubpixel(originX);
             const sy = splitSubpixel(originY);
             const fillBitmap = fillRaster.bitmap;
@@ -2995,29 +3256,40 @@ export function renderEventLines(input: RenderLinesInput): void {
           }
 
           if (!useBox && borderMax > 0) {
-            if (!outlineRaster) {
-              outlineRaster = glyphPath
-                ? rasterizeOutlineFromPath(
-                    glyphPath,
-                    item.borderX,
-                    item.borderY,
-                    true,
-                    phaseX,
-                    phaseY,
-                  )
-                : null;
-              if (outlineRaster && outlineKey) {
-                setRasterCache(
-                  glyphOutlineCache,
-                  item.font,
-                  outlineKey,
-                  outlineRaster,
-                );
-              }
+            const strokePath = getCachedGlyphStrokePath(
+              item.font,
+              glyphId,
+              scaleX,
+              scaleY,
+              item.syntheticItalic,
+              boldStrength,
+              item.borderX,
+              item.borderY,
+            );
+            const strokeCbox = strokePath ? getPathCboxDown(strokePath) : null;
+            const qStroke = strokeCbox
+              ? quantizeDeviceMatrix(
+                  transformMatrix,
+                  strokeCbox,
+                  padX,
+                  padY,
+                  qtRunDelta,
+                )
+              : null;
+            if (strokePath && qStroke) {
+              outlineRaster = rasterizeFillFromPath(
+                strokePath.perspective(
+                  flipYMatrix3(qStroke.relativeM) as Matrix3x3,
+                ),
+                true,
+                FillRule.NonZero,
+              );
+              outlinePosX = qStroke.posX;
+              outlinePosY = qStroke.posY;
             }
             if (outlineRaster) {
-              const originX = gx + outlineRaster.bearingX;
-              const originY = gy - outlineRaster.bearingY;
+              const originX = outlinePosX + outlineRaster.bearingX;
+              const originY = outlinePosY - outlineRaster.bearingY;
               const sx = splitSubpixel(originX);
               const sy = splitSubpixel(originY);
               const outlineBitmap = outlineRaster.bitmap;
@@ -3057,7 +3329,10 @@ export function renderEventLines(input: RenderLinesInput): void {
             PixelMode.Gray,
           );
           if ((globalThis as any).__SUBFRAME_ALLOC_CENSUS__)
-            recordAllocCensus("combined.fillBitmap.alloc", fillBitmap.buffer.length);
+            recordAllocCensus(
+              "combined.fillBitmap.alloc",
+              fillBitmap.buffer.length,
+            );
           for (let gi = 0; gi < fillGlyphs.length; gi++) {
             const g = fillGlyphs[gi]!;
             addBitmapClamped(
@@ -3079,7 +3354,10 @@ export function renderEventLines(input: RenderLinesInput): void {
               : null;
           if (outlineBitmap)
             if ((globalThis as any).__SUBFRAME_ALLOC_CENSUS__)
-              recordAllocCensus("combined.outlineBitmap.alloc", outlineBitmap.buffer.length);
+              recordAllocCensus(
+                "combined.outlineBitmap.alloc",
+                outlineBitmap.buffer.length,
+              );
           if (outlineBitmap) {
             for (let gi = 0; gi < outlineGlyphs.length; gi++) {
               const g = outlineGlyphs[gi]!;
@@ -3149,8 +3427,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           if (!deferItem && blurFill && item.edgeBlur > 0)
             applyBeBlur(fg.bitmap, item.edgeBlur);
 
-          let og: ReturnType<BitmapBuilder["toRasterizedGlyph"]> | null =
-            null;
+          let og: ReturnType<BitmapBuilder["toRasterizedGlyph"]> | null = null;
           let ogBaseForDesc: PhantomBase | null = null;
           if (outlineBase) {
             const ogBase = outlineBase.intoRasterizedGlyph();
@@ -3160,9 +3437,17 @@ export function renderEventLines(input: RenderLinesInput): void {
               : blurSigmaX > 0 || blurSigmaY > 0
                 ? applyLibassGaussianBlur(ogBase, blurSigmaX, blurSigmaY)
                 : ogBase;
-            if (!deferItem && og && item.edgeBlur > 0) applyBeBlur(og.bitmap, item.edgeBlur);
+            if (!deferItem && og && item.edgeBlur > 0)
+              applyBeBlur(og.bitmap, item.edgeBlur);
           }
-          if (!deferItem && og && fg && item.borderStyle !== 3 && !fillInBorder && !fillInShadow) {
+          if (
+            !deferItem &&
+            og &&
+            fg &&
+            item.borderStyle !== 3 &&
+            !fillInBorder &&
+            !fillInShadow
+          ) {
             fixOutlineBitmap(
               og,
               baseOriginX + og.bearingX,
@@ -3193,10 +3478,18 @@ export function renderEventLines(input: RenderLinesInput): void {
               outlineW: ogBaseForDesc?.bitmap.width,
               outlineH: ogBaseForDesc?.bitmap.rows,
               outlineStride: ogBaseForDesc?.bitmap.pitch,
-              punchOX: og ? splitSubpixel(baseOriginX + og.bearingX).i : undefined,
-              punchOY: og ? splitSubpixel(baseOriginY - og.bearingY).i : undefined,
-              punchFX: og ? splitSubpixel(baseOriginX + fg.bearingX).i : undefined,
-              punchFY: og ? splitSubpixel(baseOriginY - fg.bearingY).i : undefined,
+              punchOX: og
+                ? splitSubpixel(baseOriginX + og.bearingX).i
+                : undefined,
+              punchOY: og
+                ? splitSubpixel(baseOriginY - og.bearingY).i
+                : undefined,
+              punchFX: og
+                ? splitSubpixel(baseOriginX + fg.bearingX).i
+                : undefined,
+              punchFY: og
+                ? splitSubpixel(baseOriginY - fg.bearingY).i
+                : undefined,
             };
           } else {
             gpuDeferShared = null;
@@ -3250,11 +3543,27 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "shadow", item, pad, undefined, undefined, "shadow", true);
+              pushLayer(
+                layer,
+                "shadow",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "shadow",
+                true,
+              );
             }
           }
 
-          if (!deferItem && og && fg && item.borderStyle !== 3 && !fillInBorder && fillInShadow) {
+          if (
+            !deferItem &&
+            og &&
+            fg &&
+            item.borderStyle !== 3 &&
+            !fillInBorder &&
+            fillInShadow
+          ) {
             fixOutlineBitmap(
               og,
               baseOriginX + og.bearingX,
@@ -3277,7 +3586,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad, undefined, undefined, "outline", true);
+            pushLayer(
+              layer,
+              "outline",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "outline",
+              true,
+            );
           }
 
           const fgOriginX = baseOriginX + fg.bearingX;
@@ -3297,7 +3615,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSecondary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillSecondary",
+                true,
+              );
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -3310,7 +3637,16 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, undefined, "fillPrimary", true);
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                undefined,
+                "fillPrimary",
+                true,
+              );
             } else {
               const leftLayer = {
                 bitmap: fg.bitmap.buffer,
@@ -3323,14 +3659,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(leftLayer, "fill", item, pad, {
-                type: "rect",
-                x0: -KARAOKE_CLIP_INF,
-                y0: -KARAOKE_CLIP_INF,
-                x1: karaokeSplitX,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillPrimary", true);
+              pushLayer(
+                leftLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: -KARAOKE_CLIP_INF,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: karaokeSplitX,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillPrimary",
+                true,
+              );
               const rightLayer = {
                 bitmap: fg.bitmap.buffer,
                 width: fg.bitmap.width,
@@ -3342,14 +3687,23 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(rightLayer, "fill", item, pad, {
-                type: "rect",
-                x0: karaokeSplitX,
-                y0: -KARAOKE_CLIP_INF,
-                x1: KARAOKE_CLIP_INF,
-                y1: KARAOKE_CLIP_INF,
-                inverse: false,
-              }, undefined, "fillSecondary", true);
+              pushLayer(
+                rightLayer,
+                "fill",
+                item,
+                pad,
+                {
+                  type: "rect",
+                  x0: karaokeSplitX,
+                  y0: -KARAOKE_CLIP_INF,
+                  x1: KARAOKE_CLIP_INF,
+                  y1: KARAOKE_CLIP_INF,
+                  inverse: false,
+                },
+                undefined,
+                "fillSecondary",
+                true,
+              );
             }
           } else {
             const layer = {
@@ -3363,7 +3717,16 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad, undefined, undefined, "fillSolid", true);
+            pushLayer(
+              layer,
+              "fill",
+              item,
+              pad,
+              undefined,
+              undefined,
+              "fillSolid",
+              true,
+            );
           }
 
           if (!deferItem && combinedKey) {
@@ -3544,8 +3907,11 @@ export function renderEventLines(input: RenderLinesInput): void {
           rasterKey += `|P${phaseX},${phaseY}`;
           filteredKey = `f|${rasterKey}|${item.blurSigmaX}|${item.blurSigmaY}|${item.edgeBlur}`;
           cachedFiltered = getTransformGlyphCache(filteredKey);
-          if (!cachedFiltered) cachedRaster = getTransformGlyphCache(`r|${rasterKey}`);
-          transformGlyphCacheRecordLookup(cachedFiltered !== null || cachedRaster !== null);
+          if (!cachedFiltered)
+            cachedRaster = getTransformGlyphCache(`r|${rasterKey}`);
+          transformGlyphCacheRecordLookup(
+            cachedFiltered !== null || cachedRaster !== null,
+          );
         }
 
         let fillRaster: RasterizedGlyph | null = null;
@@ -3608,8 +3974,7 @@ export function renderEventLines(input: RenderLinesInput): void {
               bePadding(item.edgeBlur) === 0 &&
               (item.blurSigmaX > 0 || item.blurSigmaY > 0);
             poolFillRaster =
-              rasterPoolable &&
-              shouldBlurFill(item.borderStyle, borderMax);
+              rasterPoolable && shouldBlurFill(item.borderStyle, borderMax);
             fillRaster = rasterizeFillFromPath(
               glyphPath,
               true,
@@ -3637,7 +4002,9 @@ export function renderEventLines(input: RenderLinesInput): void {
                 poolOutlineRaster = rasterPoolable;
                 outlineRaster = rasterizeFillFromPath(
                   strokeMatrixFinal
-                    ? strokePath.perspective(flipYMatrix3(strokeMatrixFinal) as Matrix3x3)
+                    ? strokePath.perspective(
+                        flipYMatrix3(strokeMatrixFinal) as Matrix3x3,
+                      )
                     : strokePath,
                   true,
                   FillRule.NonZero,
@@ -3649,7 +4016,11 @@ export function renderEventLines(input: RenderLinesInput): void {
               }
             }
             if (rasterKey && fillRaster) {
-              setTransformGlyphCache(`r|${rasterKey}`, fillRaster, outlineRaster);
+              setTransformGlyphCache(
+                `r|${rasterKey}`,
+                fillRaster,
+                outlineRaster,
+              );
             }
           }
         }
@@ -3670,9 +4041,7 @@ export function renderEventLines(input: RenderLinesInput): void {
           let og: ReturnType<typeof cloneRasterGlyph> | null = null;
           if (cachedFiltered) {
             fg = cloneRasterGlyph(cachedFiltered.fg);
-            og = cachedFiltered.og
-              ? cloneRasterGlyph(cachedFiltered.og)
-              : null;
+            og = cachedFiltered.og ? cloneRasterGlyph(cachedFiltered.og) : null;
             gpuDeferShared = null;
             gpuDeferVariant = null;
           } else {
@@ -3740,7 +4109,8 @@ export function renderEventLines(input: RenderLinesInput): void {
                 : blurSigmaX > 0 || blurSigmaY > 0
                   ? applyLibassGaussianBlur(ogBase, blurSigmaX, blurSigmaY)
                   : ogBase;
-              if (!deferItem && og && item.edgeBlur > 0) applyBeBlur(og.bitmap, item.edgeBlur);
+              if (!deferItem && og && item.edgeBlur > 0)
+                applyBeBlur(og.bitmap, item.edgeBlur);
               // Same lifetime argument as the fill: the pooled outline raster is
               // dead once the blur produced its own output.
               if (
@@ -3788,14 +4158,22 @@ export function renderEventLines(input: RenderLinesInput): void {
               };
               if (poolFrameLocalBitmaps) {
                 markFrameLocalBitmapBuffer(fgBase.bitmap.buffer);
-                if (ogBaseForDesc) markFrameLocalBitmapBuffer(ogBaseForDesc.bitmap.buffer);
+                if (ogBaseForDesc)
+                  markFrameLocalBitmapBuffer(ogBaseForDesc.bitmap.buffer);
               }
             } else {
               gpuDeferShared = null;
               gpuDeferVariant = null;
             }
           }
-          if (!deferItem && og && fg && item.borderStyle !== 3 && !fillInBorder && !fillInShadow) {
+          if (
+            !deferItem &&
+            og &&
+            fg &&
+            item.borderStyle !== 3 &&
+            !fillInBorder &&
+            !fillInShadow
+          ) {
             fixOutlineBitmap(
               og,
               px + og.bearingX,
@@ -3840,12 +4218,27 @@ export function renderEventLines(input: RenderLinesInput): void {
                   z: ev.layer,
                   clip: clip ?? undefined,
                 } as BitmapLayer;
-                pushLayer(layer, "shadow", item, pad, undefined, glyphMeta, "shadow");
+                pushLayer(
+                  layer,
+                  "shadow",
+                  item,
+                  pad,
+                  undefined,
+                  glyphMeta,
+                  "shadow",
+                );
               }
             }
           }
 
-          if (!deferItem && og && fg && item.borderStyle !== 3 && !fillInBorder && fillInShadow) {
+          if (
+            !deferItem &&
+            og &&
+            fg &&
+            item.borderStyle !== 3 &&
+            !fillInBorder &&
+            fillInShadow
+          ) {
             fixOutlineBitmap(
               og,
               px + og.bearingX,
@@ -3868,7 +4261,15 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "outline", item, pad, undefined, glyphMeta, "outline");
+            pushLayer(
+              layer,
+              "outline",
+              item,
+              pad,
+              undefined,
+              glyphMeta,
+              "outline",
+            );
           }
 
           const fgOriginX = px + fg.bearingX;
@@ -3888,7 +4289,15 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillSecondary");
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                glyphMeta,
+                "fillSecondary",
+              );
             } else if (karaokeSplitX >= right) {
               const layer = {
                 bitmap: fg.bitmap.buffer,
@@ -3901,7 +4310,15 @@ export function renderEventLines(input: RenderLinesInput): void {
                 z: ev.layer,
                 clip: clip ?? undefined,
               } as BitmapLayer;
-              pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillPrimary");
+              pushLayer(
+                layer,
+                "fill",
+                item,
+                pad,
+                undefined,
+                glyphMeta,
+                "fillPrimary",
+              );
             } else {
               const leftLayer = {
                 bitmap: fg.bitmap.buffer,
@@ -3970,7 +4387,15 @@ export function renderEventLines(input: RenderLinesInput): void {
               z: ev.layer,
               clip: clip ?? undefined,
             } as BitmapLayer;
-            pushLayer(layer, "fill", item, pad, undefined, glyphMeta, "fillSolid");
+            pushLayer(
+              layer,
+              "fill",
+              item,
+              pad,
+              undefined,
+              glyphMeta,
+              "fillSolid",
+            );
           }
         }
 
@@ -4055,21 +4480,37 @@ export function renderEventLines(input: RenderLinesInput): void {
           clip: clip ?? undefined,
         } as BitmapLayer;
         cacheItemIndex = itemIndex;
-        pushLayer(layer, "fill", anchorItem, 0, undefined, undefined, "fillSolid");
+        pushLayer(
+          layer,
+          "fill",
+          anchorItem,
+          0,
+          undefined,
+          undefined,
+          "fillSolid",
+        );
       };
 
       if (maxUnderlineThickness > 0 && underlinePos !== null) {
         const yPos = baselineY - underlinePos;
-        drawLine(yPos, maxUnderlineThickness, underlineColor, underlineItemIndex);
+        drawLine(
+          yPos,
+          maxUnderlineThickness,
+          underlineColor,
+          underlineItemIndex,
+        );
       }
       if (maxStrikeoutThickness > 0 && strikeoutPos !== null) {
         const yPos = baselineY - strikeoutPos;
-        drawLine(yPos, maxStrikeoutThickness, strikeoutColor, strikeoutItemIndex);
+        drawLine(
+          yPos,
+          maxStrikeoutThickness,
+          strikeoutColor,
+          strikeoutItemIndex,
+        );
       }
     }
 
     penY = quantSubpixel(penY + line.height);
   }
-
-
 }

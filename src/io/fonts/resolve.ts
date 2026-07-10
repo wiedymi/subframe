@@ -8,6 +8,7 @@ type NodePath = {
   join: (...parts: string[]) => string;
 };
 type NodeOs = { homedir: () => string };
+
 import { Font } from "text-shaper";
 
 type NodeModules = { fs: NodeFs; path: NodePath; os: NodeOs };
@@ -35,7 +36,8 @@ const CJK_RANGES: Array<[number, number]> = [
 
 function getNodeModules(): NodeModules | null {
   if (nodeModules !== undefined) return nodeModules;
-  const metaReq = (import.meta as any).require as undefined | ((id: string) => unknown);
+  const metaReq = (import.meta as any).require as
+    undefined | ((id: string) => unknown);
   const req = (globalThis as any).require ?? metaReq;
   if (typeof req !== "function") {
     nodeModules = null;
@@ -56,7 +58,9 @@ function getNodeModules(): NodeModules | null {
 function requireNodeModules(): NodeModules {
   const mods = getNodeModules();
   if (!mods) {
-    throw new Error("Font resolution requires Bun runtime with access to system fonts.");
+    throw new Error(
+      "Font resolution requires Bun runtime with access to system fonts.",
+    );
   }
   return mods;
 }
@@ -103,7 +107,12 @@ function findMacPingFangPath(): string | null {
     for (let j = 0; j < assets.length; j++) {
       const asset = assets[j]!;
       if (!asset.endsWith(".asset")) continue;
-      const candidate = path.join(assetRoot, asset, "AssetData", "PingFang.ttc");
+      const candidate = path.join(
+        assetRoot,
+        asset,
+        "AssetData",
+        "PingFang.ttc",
+      );
       if (fs.existsSync(candidate)) {
         macPingFangPath = candidate;
         return candidate;
@@ -175,9 +184,7 @@ function findPingFangScIndex(path: string): number | null {
 }
 
 export function setFontSearchPaths(paths: string[]): void {
-  fontSearchPaths = paths
-    .map((p) => p.trim())
-    .filter((p) => p.length > 0);
+  fontSearchPaths = paths.map((p) => p.trim()).filter((p) => p.length > 0);
   fontSearchIndex = null;
   fontFaceIndex = null;
 }
@@ -253,13 +260,7 @@ function faceWeightFromOs2(usWeightClass: number, boldFlag: boolean): number {
 }
 
 function extractFaceInfo(font: Font, path: string): FontFaceInfo {
-  const meta = font as unknown as {
-    name?: { records?: Array<{ nameId: number; value: string }> } | null;
-    os2?: { usWeightClass?: number; fsSelection?: number } | null;
-    head?: { macStyle?: number } | null;
-    isCFF?: boolean;
-  };
-  const records = meta.name?.records ?? [];
+  const records = font.name?.records ?? [];
   const families: string[] = [];
   const fullnames: string[] = [];
   let postscriptName: string | null = null;
@@ -277,7 +278,7 @@ function extractFaceInfo(font: Font, path: string): FontFaceInfo {
       postscriptName = value;
     }
   }
-  const os2 = meta.os2;
+  const os2 = font.os2;
   let bold = false;
   let italic = false;
   if (os2 && os2.fsSelection !== undefined) {
@@ -285,7 +286,7 @@ function extractFaceInfo(font: Font, path: string): FontFaceInfo {
     bold = (os2.fsSelection & 0x20) !== 0;
     italic = (os2.fsSelection & 0x01) !== 0;
   } else {
-    const macStyle = meta.head?.macStyle ?? 0;
+    const macStyle = font.head.macStyle;
     bold = (macStyle & 0x01) !== 0;
     italic = (macStyle & 0x02) !== 0;
   }
@@ -298,7 +299,7 @@ function extractFaceInfo(font: Font, path: string): FontFaceInfo {
     weight,
     bold,
     italic,
-    postscriptOutlines: meta.isCFF === true,
+    postscriptOutlines: font.isCFF,
   };
 }
 
@@ -333,16 +334,12 @@ function buildFontFaceIndex(): FontFaceInfo[] {
                 collection.get(f),
                 `${full}#${f}`,
               );
-            } catch {
-              continue;
-            }
+            } catch {}
           }
         } else {
           faces[faces.length] = extractFaceInfo(Font.load(buffer), full);
         }
-      } catch {
-        continue;
-      }
+      } catch {}
     }
   }
   fontFaceIndex = faces;
@@ -577,26 +574,29 @@ export function resolveFontPath(fontName: string): string {
   const suffix = hash > 0 ? fontName.slice(hash) : "";
   const baseName = hash > 0 ? fontName.slice(0, hash) : fontName;
   const ext = path.extname(baseName).toLowerCase();
-  if (FONT_EXTS.has(ext) && fs.existsSync(baseName)) return `${baseName}${suffix}`;
+  if (FONT_EXTS.has(ext) && fs.existsSync(baseName))
+    return `${baseName}${suffix}`;
 
   if (fontSearchPaths.length > 0) {
     for (let i = 0; i < fontSearchPaths.length; i++) {
       const dir = fontSearchPaths[i]!;
-    const direct = path.join(dir, baseName);
-    if (fs.existsSync(direct)) return `${direct}${suffix}`;
-    for (const ext of FONT_EXTS) {
-      const candidate = path.join(dir, `${baseName}${ext}`);
-      if (fs.existsSync(candidate)) return `${candidate}${suffix}`;
+      const direct = path.join(dir, baseName);
+      if (fs.existsSync(direct)) return `${direct}${suffix}`;
+      for (const ext of FONT_EXTS) {
+        const candidate = path.join(dir, `${baseName}${ext}`);
+        if (fs.existsSync(candidate)) return `${candidate}${suffix}`;
+      }
     }
+    const index = buildFontSearchIndex();
+    const key = baseName.toLowerCase();
+    const indexed = index.get(key);
+    if (indexed) return `${indexed}${suffix}`;
   }
-  const index = buildFontSearchIndex();
-  const key = baseName.toLowerCase();
-  const indexed = index.get(key);
-  if (indexed) return `${indexed}${suffix}`;
-}
 
   if (typeof Bun === "undefined") {
-    throw new Error("Font resolution requires Bun runtime with access to system fonts.");
+    throw new Error(
+      "Font resolution requires Bun runtime with access to system fonts.",
+    );
   }
 
   if (process.platform === "darwin") {

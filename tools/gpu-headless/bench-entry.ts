@@ -28,8 +28,17 @@ import {
   setGpuFilterDeferEnabled,
   setGpuFilterProvider,
 } from "../../src/core/filters/gpu-provider";
-import { getWorkerPoolStats, isWorkerPoolUsable, setWorkerCount } from "../../src/core/worker-pool";
-import { getFramePipelineStats, resetFramePipeline, setFrameScatter, setFrameHybrid } from "../../src/core/pipeline";
+import {
+  getWorkerPoolStats,
+  isWorkerPoolUsable,
+  setWorkerCount,
+} from "../../src/core/worker-pool";
+import {
+  getFramePipelineStats,
+  resetFramePipeline,
+  setFrameScatter,
+  setFrameHybrid,
+} from "../../src/core/pipeline";
 import { setAllocCensusEnabled } from "../../src/core/raster/bitmap";
 
 const W = 1920;
@@ -38,8 +47,14 @@ const QS = new URLSearchParams(location.search);
 const FRAMES = Number(QS.get("frames")) > 0 ? Number(QS.get("frames")) : 300;
 const FRAME_MS = 1000 / 60;
 // Optional focus filters (fast iteration): ?only=beastars&configs=default,gpu-filters-off
-const ONLY_FIXTURES = (QS.get("only") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-const ONLY_CONFIGS = (QS.get("configs") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+const ONLY_FIXTURES = (QS.get("only") ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const ONLY_CONFIGS = (QS.get("configs") ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const ALLOC_CENSUS_ENABLED = QS.get("allocCensus") === "1";
 const USE_CLASS_PATH = QS.get("classPath") === "1";
 if (QS.get("sabArenas") === "0" || QS.get("sabArenas") === "1") {
@@ -172,27 +187,132 @@ const CONFIGS: Config[] = [
   // "default" now exercises the browser-only capacity-loss auto-scaling
   // (workerCount undefined => adaptive base 6 -> cap hc-2). w6/w8 pin the
   // endpoints for the worker-count A/B.
-  { id: "default", workers: true, gpuFilters: true, profile: false, hybrid: true },
-  { id: "w6", workers: true, gpuFilters: true, profile: false, workerCount: 6, hybrid: true },
-  { id: "w8", workers: true, gpuFilters: true, profile: false, workerCount: 8, hybrid: true },
+  {
+    id: "default",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    hybrid: true,
+  },
+  {
+    id: "w6",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 6,
+    hybrid: true,
+  },
+  {
+    id: "w8",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 8,
+    hybrid: true,
+  },
   // Per-frame event-scatter N-sweep (fallback path A/B) — the fork-join at 4/6/8.
-  { id: "s4", workers: true, gpuFilters: true, profile: false, workerCount: 4, scatter: true, hybrid: false },
-  { id: "s6", workers: true, gpuFilters: true, profile: false, workerCount: 6, scatter: true, hybrid: false },
-  { id: "s8", workers: true, gpuFilters: true, profile: false, workerCount: 8, scatter: true, hybrid: false },
+  {
+    id: "s4",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 4,
+    scatter: true,
+    hybrid: false,
+  },
+  {
+    id: "s6",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 6,
+    scatter: true,
+    hybrid: false,
+  },
+  {
+    id: "s8",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 8,
+    scatter: true,
+    hybrid: false,
+  },
   // HYBRID (ring primary + scatter miss-fallback) — the product path, N-sweep.
-  { id: "h6", workers: true, gpuFilters: true, profile: false, workerCount: 6, hybrid: true },
-  { id: "h8", workers: true, gpuFilters: true, profile: false, workerCount: 8, hybrid: true },
+  {
+    id: "h6",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 6,
+    hybrid: true,
+  },
+  {
+    id: "h8",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 8,
+    hybrid: true,
+  },
   // Whole-frame ring baseline (scatter OFF, miss -> single-thread) for the A/B.
-  { id: "ring6", workers: true, gpuFilters: true, profile: false, workerCount: 6, scatter: false, hybrid: false },
-  { id: "ring8", workers: true, gpuFilters: true, profile: false, workerCount: 8, scatter: false, hybrid: false },
-  { id: "workers-off", workers: false, gpuFilters: true, profile: false, hybrid: false },
-  { id: "gpu-filters-off", workers: true, gpuFilters: false, profile: false, hybrid: true },
-  { id: "profiled", workers: true, gpuFilters: true, profile: true, hybrid: true },
-  { id: "profiled-off", workers: true, gpuFilters: false, profile: true, hybrid: true },
+  {
+    id: "ring6",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 6,
+    scatter: false,
+    hybrid: false,
+  },
+  {
+    id: "ring8",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    workerCount: 8,
+    scatter: false,
+    hybrid: false,
+  },
+  {
+    id: "workers-off",
+    workers: false,
+    gpuFilters: true,
+    profile: false,
+    hybrid: false,
+  },
+  {
+    id: "gpu-filters-off",
+    workers: true,
+    gpuFilters: false,
+    profile: false,
+    hybrid: true,
+  },
+  {
+    id: "profiled",
+    workers: true,
+    gpuFilters: true,
+    profile: true,
+    hybrid: true,
+  },
+  {
+    id: "profiled-off",
+    workers: true,
+    gpuFilters: false,
+    profile: true,
+    hybrid: true,
+  },
   // Provider ON but deferral OFF: measures the "GPU provider present, all blur
   // on CPU" cost. If this matches gpu-filters-off, the deferral (not the adopt
   // guard) is the overhead; if it matches default, the adopt guard is.
-  { id: "defer-off", workers: true, gpuFilters: true, profile: false, deferOff: true, hybrid: true },
+  {
+    id: "defer-off",
+    workers: true,
+    gpuFilters: true,
+    profile: false,
+    deferOff: true,
+    hybrid: true,
+  },
 ];
 
 function makeCanvas(): HTMLCanvasElement {
@@ -215,7 +335,10 @@ type StageTotals = {
 
 type AllocCensus = Record<string, { bytes: number; count: number }>;
 
-function diffAllocCensus(before: unknown, after: unknown): AllocCensus | undefined {
+function diffAllocCensus(
+  before: unknown,
+  after: unknown,
+): AllocCensus | undefined {
   const b = (before && typeof before === "object" ? before : {}) as AllocCensus;
   const a = (after && typeof after === "object" ? after : {}) as AllocCensus;
   const out: AllocCensus = {};
@@ -239,14 +362,20 @@ type HeapSample = {
   jsHeapSizeLimit?: number;
 };
 
-function readMainHeapSample(frame: number, timeMs: number, wallMs: number): HeapSample | null {
-  const memory = (performance as Performance & {
-    memory?: {
-      usedJSHeapSize?: number;
-      totalJSHeapSize?: number;
-      jsHeapSizeLimit?: number;
-    };
-  }).memory;
+function readMainHeapSample(
+  frame: number,
+  timeMs: number,
+  wallMs: number,
+): HeapSample | null {
+  const memory = (
+    performance as Performance & {
+      memory?: {
+        usedJSHeapSize?: number;
+        totalJSHeapSize?: number;
+        jsHeapSizeLimit?: number;
+      };
+    }
+  ).memory;
   if (!memory || typeof memory.usedJSHeapSize !== "number") return null;
   const sample: HeapSample = {
     frame,
@@ -254,8 +383,10 @@ function readMainHeapSample(frame: number, timeMs: number, wallMs: number): Heap
     wallMs,
     usedJSHeapSize: memory.usedJSHeapSize,
   };
-  if (typeof memory.totalJSHeapSize === "number") sample.totalJSHeapSize = memory.totalJSHeapSize;
-  if (typeof memory.jsHeapSizeLimit === "number") sample.jsHeapSizeLimit = memory.jsHeapSizeLimit;
+  if (typeof memory.totalJSHeapSize === "number")
+    sample.totalJSHeapSize = memory.totalJSHeapSize;
+  if (typeof memory.jsHeapSizeLimit === "number")
+    sample.jsHeapSizeLimit = memory.jsHeapSizeLimit;
   return sample;
 }
 
@@ -267,7 +398,11 @@ async function runOne(
   await post("/log", { msg: `start ${fixture.id}/${config.id}` });
 
   const text = await (await fetch(`/ass/${fixture.file}`)).text();
-  const parsed = parseASS(text, { onError: "collect", strict: false, preserveOrder: true });
+  const parsed = parseASS(text, {
+    onError: "collect",
+    strict: false,
+    preserveOrder: true,
+  });
   const doc: SubtitleDocument = parsed.document;
 
   clearEventLayerCache();
@@ -303,7 +438,15 @@ async function runOne(
   const origLog = console.log.bind(console);
   if (config.profile) {
     (globalThis as any).process = { env: { SUBFRAME_PROFILE: "1" } };
-    stages = { frames: 0, frameMs: [], layoutMs: 0, rasterMs: 0, blurMs: 0, shapeMs: 0, fontMs: 0 };
+    stages = {
+      frames: 0,
+      frameMs: [],
+      layoutMs: 0,
+      rasterMs: 0,
+      blurMs: 0,
+      shapeMs: 0,
+      fontMs: 0,
+    };
     console.log = (...args: unknown[]) => {
       const line = String(args[0] ?? "");
       if (line.startsWith("[subframe] frame=")) {
@@ -325,7 +468,12 @@ async function runOne(
   }
 
   const sf = USE_CLASS_PATH
-    ? new Subframe({ workers: config.workers, fontResolver: resolveBenchFont })
+    ? new Subframe({
+        canvas: makeCanvas(),
+        workers: config.workers,
+        workerCount: config.workerCount ?? undefined,
+        fontResolver: resolveBenchFont,
+      })
     : null;
   if (sf) {
     sf.resize(W, H);
@@ -338,14 +486,19 @@ async function runOne(
     const prepared = await sf.frame(fixture.t0);
     prepared.release();
   } else {
-    const prepared = await prepareDocument(doc, W, H, { timeMs: fixture.t0, boundaryWarmupMs: 500 });
+    const prepared = await prepareDocument(doc, W, H, {
+      timeMs: fixture.t0,
+      boundaryWarmupMs: 500,
+    });
     releaseRenderResult(prepared);
   }
   const prepareMs = performance.now() - prepareStart;
 
   const cache0 = getEventLayerCacheStats();
-  const pool0 = getWorkerPoolStats();
-  const framePipeline0 = getFramePipelineStats();
+  const initialFacadeStats = sf?.stats();
+  const pool0 = initialFacadeStats?.workerPool ?? getWorkerPoolStats();
+  const framePipeline0 =
+    initialFacadeStats?.pipeline ?? getFramePipelineStats();
 
   const renderMs = new Array<number>(FRAMES);
   const compositeMs = new Array<number>(FRAMES);
@@ -384,12 +537,17 @@ async function runOne(
     gpuRoutedCounts[i] = routed;
     if ("release" in result) (result.release as () => void)();
     else releaseRenderResult(result);
-    if (result.activeEvents.length > activeEventsMax) activeEventsMax = result.activeEvents.length;
+    if (result.activeEvents.length > activeEventsMax)
+      activeEventsMax = result.activeEvents.length;
     const rendered = i + 1;
     if (rendered % 60 === 0 || rendered === FRAMES) {
       const elapsedWall = performance.now() - wallStart;
       const s = readMainHeapSample(rendered, rendered * FRAME_MS, elapsedWall);
-      if (s && (heapSamples.length === 0 || heapSamples[heapSamples.length - 1]!.frame !== s.frame)) {
+      if (
+        s &&
+        (heapSamples.length === 0 ||
+          heapSamples[heapSamples.length - 1]!.frame !== s.frame)
+      ) {
         heapSamples.push(s);
       }
     }
@@ -397,12 +555,13 @@ async function runOne(
   const wallTotalMs = performance.now() - wallStart;
 
   const cache1 = getEventLayerCacheStats();
-  const pool1 = getWorkerPoolStats();
-  const framePipeline1 = getFramePipelineStats();
+  const finalFacadeStats = sf?.stats();
+  const pool1 = finalFacadeStats?.workerPool ?? getWorkerPoolStats();
+  const framePipeline1 = finalFacadeStats?.pipeline ?? getFramePipelineStats();
   if (USE_CLASS_PATH && config.workers && !pool1.active) {
     throw new Error("Subframe class path worker pool is inactive");
   }
-  const workerPoolUsableAfter = isWorkerPoolUsable();
+  const workerPoolUsableAfter = sf ? pool1.active : isWorkerPoolUsable();
   sf?.dispose();
 
   if (config.profile) {
@@ -412,7 +571,9 @@ async function runOne(
   setGpuFilterProvider(savedProvider);
   setGpuFilterDeferEnabled(true);
 
-  await post("/log", { msg: `done ${fixture.id}/${config.id} wall=${wallTotalMs.toFixed(0)}ms` });
+  await post("/log", {
+    msg: `done ${fixture.id}/${config.id} wall=${wallTotalMs.toFixed(0)}ms`,
+  });
 
   return {
     fixture: fixture.id,
@@ -438,10 +599,14 @@ async function runOne(
       dedupHits: framePipeline1.dedupHits - framePipeline0.dedupHits,
       dedupFrames: framePipeline1.dedupFrames - framePipeline0.dedupFrames,
       boundaryHits: framePipeline1.boundaryHits - framePipeline0.boundaryHits,
-      boundaryAwaited: framePipeline1.boundaryAwaited - framePipeline0.boundaryAwaited,
-      boundaryMisfires: framePipeline1.boundaryMisfires - framePipeline0.boundaryMisfires,
-      boundaryFiredEarly: framePipeline1.boundaryFiredEarly - framePipeline0.boundaryFiredEarly,
-      boundaryStale: framePipeline1.boundaryStale - framePipeline0.boundaryStale,
+      boundaryAwaited:
+        framePipeline1.boundaryAwaited - framePipeline0.boundaryAwaited,
+      boundaryMisfires:
+        framePipeline1.boundaryMisfires - framePipeline0.boundaryMisfires,
+      boundaryFiredEarly:
+        framePipeline1.boundaryFiredEarly - framePipeline0.boundaryFiredEarly,
+      boundaryStale:
+        framePipeline1.boundaryStale - framePipeline0.boundaryStale,
       boundaryDepth: framePipeline1.boundaryDepth,
     },
     workerPoolUsableAfter,
@@ -462,7 +627,9 @@ async function main() {
     userAgent: navigator.userAgent,
     typeofProcess: typeof (globalThis as any).process,
     hasWorker: typeof Worker !== "undefined",
-    crossOriginIsolated: (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
+    crossOriginIsolated:
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated ===
+      true,
     sharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
     sabArenasFlag: (globalThis as any).__SUBFRAME_SAB_ARENAS__ ?? "default",
     classPath: USE_CLASS_PATH,
@@ -479,8 +646,12 @@ async function main() {
 
   const sharedBackend = await createWebGPUBackend({ canvas: makeCanvas() });
 
-  const fixtures = ONLY_FIXTURES.length ? FIXTURES.filter((f) => ONLY_FIXTURES.includes(f.id)) : FIXTURES;
-  const configs = ONLY_CONFIGS.length ? CONFIGS.filter((c) => ONLY_CONFIGS.includes(c.id)) : CONFIGS;
+  const fixtures = ONLY_FIXTURES.length
+    ? FIXTURES.filter((f) => ONLY_FIXTURES.includes(f.id))
+    : FIXTURES;
+  const configs = ONLY_CONFIGS.length
+    ? CONFIGS.filter((c) => ONLY_CONFIGS.includes(c.id))
+    : CONFIGS;
   const runs: Array<Record<string, unknown>> = [];
   for (const fixture of fixtures) {
     for (const config of configs) {

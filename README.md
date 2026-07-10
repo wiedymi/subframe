@@ -6,7 +6,7 @@
 [![Discord](https://img.shields.io/badge/-Discord-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/zemMZtrkSb)
 [![Support me](https://img.shields.io/badge/-Support%20me-ff69b4?style=flat-square&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/vivy-company)
 
-Subframe is a realtime ASS/SSA subtitle renderer for web and Bun. It renders Subforge `SubtitleDocument` directly, targets libass visual parity, and is written entirely in TypeScript plus WGSL — no libass-to-wasm builds involved.
+Subframe is a realtime ASS/SSA subtitle renderer for web and Bun. It renders Subforge `SubtitleDocument` directly and targets libass visual parity. The runtime is TypeScript plus WGSL and small self-verified WebAssembly raster kernels; it does not ship a native addon or a full libass build.
 
 - **Measured on hostile content.** The repository includes Bun and real-browser harnesses for the JASSUB suite, including the Beastars frame-by-frame typesetting storm. Current measured tails are recorded in `docs/GOALS.md`; 60 fps is a target, not a blanket guarantee.
 - **Byte-exact GPU filters.** Blur and subpixel shift run as batched WGSL compute fused into the composite submit. A hardware gate proves GPU output identical (`maxDiff 0`) to the CPU reference path.
@@ -57,7 +57,7 @@ Notes:
 
 - `Subframe` starts async initialization in the constructor; `ready`, `render()`, and `frame()` queue behind it.
 - Workers default on. Package builds embed an inline module worker; strict CSP pages can serve the exported `subframe/worker-entry.js` asset from their own origin and pass that URL through `workerUrl`, or use `workers: false` to stay single-threaded.
-- Only one live `Subframe` instance is supported per page for now because the renderer core owns module-global caches and worker-pool state.
+- Each `Subframe` owns its font registry, scheduler, lookahead state, workers, and returned-frame leases. Multiple live facades can use different documents and fonts without sharing those lifecycle resources.
 - Pass the expected initial media time to `setDocument()` when starting deep in a script. This warms the actual playback window instead of the first subtitle event. If a video is already attached, its current time is used automatically.
 - Seeking needs no special handling — jump the time you pass to `render()` or the attached video; the pipeline re-primes itself.
 
@@ -87,7 +87,7 @@ release();
 sf.dispose();
 ```
 
-The same worker pool runs under Bun for realtime server-side rendering. Use `workers: false` for deterministic single-threaded scripts.
+The same instance-owned worker runtime runs under Bun for realtime server-side rendering. Use `workers: false` for deterministic single-threaded scripts, or `workerCount` to cap a facade's pool.
 
 ## Fonts
 
@@ -135,6 +135,7 @@ Everything defaults to the fast path; these exist for A/B tests and constrained 
 | Control | Default | Purpose |
 |---|---|---|
 | `new Subframe({ workerUrl })` / `setWorkerSource(url)` | inline worker / unset | Worker bootstrap. `workerUrl` is the CSP escape hatch; low-level callers can still use `setWorkerSource`. |
+| `new Subframe({ workerCount })` | hardware concurrency minus one, capped at 8 | Per-facade worker cap. Each live facade owns its workers. |
 | `setWorkerPool(false)` / `setWorkerCount(n)` | on / auto | Disable or size the pool. |
 | `await sf.setDocument(doc, { timeMs, playbackFps })` / `attachDocument(doc, w, h, options)` | first event / 60 fps | Public facade attach/warmup, or explicit low-level warmup. Set `timeMs` when playback starts mid-script. |
 | `setMemoryBudget(bytes)` | ~120 MB ceilings | Scales all byte-bounded caches proportionally. |
@@ -178,7 +179,7 @@ Use the core API when you need custom scheduling, tracing, or backend ownership.
 The repo carries its own proof harnesses; all run headless:
 
 ```sh
-bun test ./test                                # unit + render tests
+bun run test                                  # unit + render tests
 bun run test:golden                            # golden-image parity fixtures
 bun run tools/parity/sweep.ts                  # frame sweep vs native libass (pixel diff)
 bun run tools/gpu-headless/run-headless.ts     # GPU==CPU byte-exactness gate (real hardware)

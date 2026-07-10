@@ -21,9 +21,20 @@ import {
   takeAllocCensusStats,
 } from "./raster/bitmap";
 import { frameContextFromDocument, frameEventParams } from "./frame";
-import { renderFrameToLayers, renderSubsetToLayers, packFrameArena } from "./frame-arena";
+import {
+  renderFrameToLayers,
+  renderSubsetToLayers,
+  packFrameArena,
+} from "./frame-arena";
 import { createShapeContext, releaseGlyphBuffer } from "./shape/shaper";
-import { registerFontSource, setFontResolver, type FontSource } from "../io/fonts/cache";
+import {
+  bindFontRegistry,
+  FontRegistry,
+  getFontRegistry,
+  registerFontSource,
+  setFontResolver,
+  type FontSource,
+} from "../io/fonts/cache";
 import { setFontSearchPaths } from "../io/fonts/resolve";
 import { applyWorkerCacheLimits } from "./memory";
 import {
@@ -41,7 +52,10 @@ applyWorkerCacheLimits();
 type InitMessage = {
   type: "init";
   fontSearchPaths: string[];
-  fontSources: Array<{ name: string; source: string | ArrayBuffer | Uint8Array }>;
+  fontSources: Array<{
+    name: string;
+    source: string | ArrayBuffer | Uint8Array;
+  }>;
   // Dedicated channel for result messages. When present (Bun/Node pools),
   // results are posted here so the main thread can drain them synchronously
   // without waiting for an event-loop turn; see worker-pool.ts
@@ -55,8 +69,19 @@ type InitMessage = {
   allocCensusEnabled?: boolean;
   sabArenasEnabled?: boolean;
 };
-type GpuFilterProviderMessage = { type: "gpu-filter-provider"; enabled: boolean };
-type DocMessage = { type: "doc"; docId: number; doc: SubtitleDocument };
+type GpuFilterProviderMessage = {
+  type: "gpu-filter-provider";
+  enabled: boolean;
+};
+type DocMessage = {
+  type: "doc";
+  docId: number;
+  doc: SubtitleDocument;
+  fontSources: Array<{
+    name: string;
+    source: string | ArrayBuffer | Uint8Array;
+  }>;
+};
 type TaskMessage = {
   type: "task";
   taskId: number;
@@ -163,7 +188,9 @@ function recordArenaNeed(classBytes: number): void {
   arenaRecentHighWater = high;
 }
 
-function acquireArenaBuffer(minBytes: number): { buffer: ArrayBuffer; reused: boolean } | null {
+function acquireArenaBuffer(
+  minBytes: number,
+): { buffer: ArrayBuffer; reused: boolean } | null {
   if (minBytes <= 0) return null;
   const classBytes = arenaSizeClass(minBytes);
   recordArenaNeed(classBytes);
@@ -186,7 +213,8 @@ function acquireSabArenaBuffer(minBytes: number): {
   reused: boolean;
   sabSlotIdx: number;
 } | null {
-  if (!sabArenasEnabled || typeof SharedArrayBuffer === "undefined") return null;
+  if (!sabArenasEnabled || typeof SharedArrayBuffer === "undefined")
+    return null;
   if (minBytes <= 0) return null;
   const classBytes = arenaSizeClass(minBytes);
   for (let i = 0; i < sabArenaSlots.length; i++) {
@@ -265,21 +293,25 @@ function readWorkerHeapSample(): {
   workerHeapTotal?: number;
   workerHeapLimit?: number;
 } {
-  const memory = (performance as Performance & {
-    memory?: {
-      usedJSHeapSize?: number;
-      totalJSHeapSize?: number;
-      jsHeapSizeLimit?: number;
-    };
-  }).memory;
+  const memory = (
+    performance as Performance & {
+      memory?: {
+        usedJSHeapSize?: number;
+        totalJSHeapSize?: number;
+        jsHeapSizeLimit?: number;
+      };
+    }
+  ).memory;
   if (!memory || typeof memory.usedJSHeapSize !== "number") return {};
   const sample: {
     workerHeapUsed?: number;
     workerHeapTotal?: number;
     workerHeapLimit?: number;
   } = { workerHeapUsed: memory.usedJSHeapSize };
-  if (typeof memory.totalJSHeapSize === "number") sample.workerHeapTotal = memory.totalJSHeapSize;
-  if (typeof memory.jsHeapSizeLimit === "number") sample.workerHeapLimit = memory.jsHeapSizeLimit;
+  if (typeof memory.totalJSHeapSize === "number")
+    sample.workerHeapTotal = memory.totalJSHeapSize;
+  if (typeof memory.jsHeapSizeLimit === "number")
+    sample.workerHeapLimit = memory.jsHeapSizeLimit;
   return sample;
 }
 
@@ -349,7 +381,10 @@ function releasePackedFrameLocalBitmaps(layers: BitmapLayer[]): void {
 // and answers with the registered source (or null). Bun workers skip this and
 // resolve through the font search paths as before.
 const FONT_REQUEST_TIMEOUT_MS = 10_000;
-const pendingFontWaiters = new Map<string, Array<(src: FontSource | null) => void>>();
+const pendingFontWaiters = new Map<
+  string,
+  Array<(src: FontSource | null) => void>
+>();
 
 function configureGpuFilterProvider(enabled: boolean): void {
   if (enabled) {
@@ -461,8 +496,11 @@ function seedBackstopPhase(index: number, count: number): void {
   backstopPhaseSeeded = true;
   const n = count > 0 ? count : 1;
   const frac = index >= 0 ? (((index % n) + n) % n) / n : Math.random();
-  subsetFramesSinceReset = Math.floor(frac * SUBSET_CACHE_RESET_INTERVAL) % SUBSET_CACHE_RESET_INTERVAL;
-  tasksSinceReset = Math.floor(frac * CACHE_RESET_INTERVAL) % CACHE_RESET_INTERVAL;
+  subsetFramesSinceReset =
+    Math.floor(frac * SUBSET_CACHE_RESET_INTERVAL) %
+    SUBSET_CACHE_RESET_INTERVAL;
+  tasksSinceReset =
+    Math.floor(frac * CACHE_RESET_INTERVAL) % CACHE_RESET_INTERVAL;
 }
 
 // Full cache clear — the OOM backstop only. Fired when an allocation actually
@@ -594,7 +632,13 @@ async function handleRenderFrame(msg: RenderFrameMessage): Promise<void> {
   const t0 = performance.now();
   let rendered: Awaited<ReturnType<typeof renderFrameToLayers>>;
   try {
-    rendered = await renderFrameToLayers(doc, msg.timeMs, msg.width, msg.height, shapeCtx);
+    rendered = await renderFrameToLayers(
+      doc,
+      msg.timeMs,
+      msg.width,
+      msg.height,
+      shapeCtx,
+    );
   } catch (err) {
     resultTarget.postMessage({
       type: "frame",
@@ -706,7 +750,14 @@ async function handleRenderSubset(msg: RenderSubsetMessage): Promise<void> {
   const t0 = performance.now();
   let sub: Awaited<ReturnType<typeof renderSubsetToLayers>>;
   try {
-    sub = await renderSubsetToLayers(doc, msg.timeMs, msg.width, msg.height, msg.ordinals, shapeCtx);
+    sub = await renderSubsetToLayers(
+      doc,
+      msg.timeMs,
+      msg.width,
+      msg.height,
+      msg.ordinals,
+      shapeCtx,
+    );
   } catch (err) {
     resetWorkerCaches();
     return fail(String(err));
@@ -777,7 +828,8 @@ scope.onmessage = (event: MessageEvent): void => {
   const msg = event.data as InMessage;
   switch (msg.type) {
     case "init": {
-      if (msg.fontSearchPaths.length > 0) setFontSearchPaths(msg.fontSearchPaths);
+      if (msg.fontSearchPaths.length > 0)
+        setFontSearchPaths(msg.fontSearchPaths);
       for (let i = 0; i < msg.fontSources.length; i++) {
         const s = msg.fontSources[i]!;
         registerFontSource(s.name, s.source);
@@ -800,7 +852,8 @@ scope.onmessage = (event: MessageEvent): void => {
       configureGpuFilterProvider(msg.gpuFiltersEnabled === true);
       setAllocCensusEnabled(msg.allocCensusEnabled === true);
       sabArenasEnabled =
-        msg.sabArenasEnabled === true && typeof SharedArrayBuffer !== "undefined";
+        msg.sabArenasEnabled === true &&
+        typeof SharedArrayBuffer !== "undefined";
       scope.postMessage({ type: "ready" });
       break;
     }
@@ -809,6 +862,13 @@ scope.onmessage = (event: MessageEvent): void => {
       break;
     }
     case "doc": {
+      const registry = new FontRegistry();
+      for (let i = 0; i < msg.fontSources.length; i++) {
+        const source = msg.fontSources[i]!;
+        registry.register(source.name, source.source);
+      }
+      registry.setResolver(getFontRegistry().resolver);
+      bindFontRegistry(msg.doc, registry);
       docs.set(msg.docId, msg.doc);
       break;
     }

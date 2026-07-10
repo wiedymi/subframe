@@ -14,19 +14,22 @@ The WebGPU filter path is an explicit exception to the older “backend only com
 
 ## Ownership boundaries
 
-- `Subframe` is the lifecycle facade: backend selection, explicit fallback reporting, fonts, workers, document warmup, video-clock scheduling, presentation, and disposal.
+- `Subframe` is the lifecycle facade: backend selection, explicit fallback reporting, fonts, workers, document warmup, video-clock scheduling, presentation, and disposal. Each facade owns an `InstanceWorkerPool`, font registry, cadence/ring state, static-frame dedup lease, and boundary lookahead.
 - `core/pipeline.ts` is a substantial scheduler and cache owner, not a thin wrapper.
 - `core/layout/*` and `core/raster/*` own deterministic subtitle semantics.
 - `backend/*` owns device resources, atlas allocation, and compositing; WebGPU may also execute proven byte-exact deferred bitmap filters.
-- `io/fonts/*` owns registration and resolution. Facade registrations are scoped and removed on document changes or disposal.
+- `io/fonts/*` owns registration and resolution. Facade registrations are scoped, bound to that facade's documents and workers, and removed on document changes or disposal.
 - `player/render-ahead.ts` owns buffering and pacing. An attached video supplies the authoritative media clock through `requestVideoFrameCallback` when available.
 
-The core still contains module-global caches and a process-wide worker pool, so only one live `Subframe` facade is supported per JavaScript realm. Low-level callers share that same global state. This limitation is enforced instead of being hidden.
+Multiple live `Subframe` facades are supported in one JavaScript realm. Their schedulers, worker pools, font registries, document IDs, queues, cadence, and frame leases are independent; disposing one facade cannot terminate or clear another. The intentionally exported low-level functional API remains backward-compatible and still uses its module-level scheduler and caches, so low-level callers share that separate runtime.
+
+Static facade frames retain their packed worker arena with reference counting. Same-context frames with the same fully-static active event set reuse those bytes, while a bounded 250ms boundary lookahead renders upcoming event-set changes. Timestamp keys are canonicalized to microseconds so algebraically equivalent cadence calculations do not enqueue duplicate frames.
 
 ## Coordinate and determinism rules
 
 - Geometry is quantized to 1/64 px at parity-sensitive core boundaries (`SUBPIXEL_MASK = 63`). Public `BitmapLayer.originX` and `originY` are pixel coordinates, not raw 26.6 integers.
 - 3D transforms happen before rasterization.
+- Font outlines are extracted through text-shaper's typed FreeType-real-dimension path, transformed with libass-compatible quantization, then filled by the opt-in libass 16x16 tiled WebAssembly rasterizer.
 - Outline, blur, edge blur, and shadow operate on raster bitmaps.
 - Layer/event ordering is stable. Worker scatter reassembles by the original active-event ordinal before the global z-sort.
 - Same document, font bytes, timestamp, viewport, and options must produce the same masks. Machine-local fonts are the last fallback so explicit and embedded bytes take priority.

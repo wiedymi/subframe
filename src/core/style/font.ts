@@ -1,8 +1,4 @@
-import type { getFont } from "../../io/fonts/cache";
-
-type NameRecord = { nameId: number; value: string; platformId?: number };
-
-type FontHandle = Awaited<ReturnType<typeof getFont>>;
+import type { Font, NameRecord } from "text-shaper";
 
 export type ResolvedFontStyle = {
   syntheticBold: boolean;
@@ -20,17 +16,8 @@ export type FontSizingMetrics = {
   height: number;
 };
 
-function resolveFontSizingMetrics(font: FontHandle): FontSizingMetrics {
-  const fontMeta = font as unknown as {
-    os2?: {
-      usWinAscent?: number;
-      usWinDescent?: number;
-      sTypoAscender?: number;
-      sTypoDescender?: number;
-      sTypoLineGap?: number;
-    };
-  };
-  const os2 = fontMeta.os2;
+function resolveFontSizingMetrics(font: Font): FontSizingMetrics {
+  const os2 = font.os2;
   let ascender = font.ascender;
   let descender = font.descender;
   let height = font.height;
@@ -51,14 +38,18 @@ function resolveFontSizingMetrics(font: FontHandle): FontSizingMetrics {
       }
     }
   }
-  return { ascender, descender, height: height || ascender - descender || font.unitsPerEm };
+  return {
+    ascender,
+    descender,
+    height: height || ascender - descender || font.unitsPerEm,
+  };
 }
 
-export function getFontSizingMetrics(font: FontHandle): FontSizingMetrics {
+export function getFontSizingMetrics(font: Font): FontSizingMetrics {
   return resolveFontSizingMetrics(font);
 }
 
-export function getFontScaleForSize(font: FontHandle, sizePx: number): number {
+export function getFontScaleForSize(font: Font, sizePx: number): number {
   const metrics = getFontSizingMetrics(font);
   const denom = metrics.height > 0 ? metrics.height : font.unitsPerEm;
   const baseHeight = font.height;
@@ -83,20 +74,13 @@ function getNameValue(records: NameRecord[], nameId: number): string | null {
 }
 
 export function resolveFontStyle(
-  font: FontHandle,
+  font: Font,
   boldRequested: boolean,
   italicRequested: boolean,
 ): ResolvedFontStyle {
-  const fontMeta = font as unknown as {
-    os2?: { usWeightClass?: number; fsSelection?: number };
-    post?: { italicAngle?: number };
-    name?: unknown;
-    hasHinting?: boolean;
-  };
-  const os2 = fontMeta.os2;
-  const post = fontMeta.post;
-  const nameRecords = ((fontMeta.name as { records?: NameRecord[] } | null)
-    ?.records ?? []) as NameRecord[];
+  const os2 = font.os2;
+  const post = font.post;
+  const nameRecords = font.name?.records ?? [];
   const nameStyle =
     getNameValue(nameRecords, 2) ??
     getNameValue(nameRecords, 17) ??
@@ -104,8 +88,9 @@ export function resolveFontStyle(
     getNameValue(nameRecords, 6) ??
     "";
   const nameStyleLower = nameStyle.toLowerCase();
-  const nameIsBold =
-    /\b(bold|black|heavy|demi|semi\s*bold|extrabold)\b/.test(nameStyleLower);
+  const nameIsBold = /\b(bold|black|heavy|demi|semi\s*bold|extrabold)\b/.test(
+    nameStyleLower,
+  );
   const nameIsItalic = /\b(italic|oblique|slanted)\b/.test(nameStyleLower);
   const fontIsBold =
     (os2?.usWeightClass !== undefined && os2.usWeightClass >= 600) ||
@@ -117,24 +102,13 @@ export function resolveFontStyle(
     nameIsItalic;
   const syntheticBold = boldRequested && !fontIsBold;
   const syntheticItalic = italicRequested && !fontIsItalic;
-  const fontHintingSupported =
-    fontMeta.hasHinting ??
-    (font as unknown as { hasTable?: (tag: string) => boolean }).hasTable?.(
-      "glyf",
-    ) ??
-    false;
-  const fontMetrics = font as unknown as {
-    underlinePosition?: number;
-    underlineThickness?: number;
-    strikeoutPosition?: number;
-    strikeoutThickness?: number;
-  };
-  const underlinePos = fontMetrics.underlinePosition ?? -font.unitsPerEm * 0.1;
+  const fontHintingSupported = font.hasHinting;
+  const underlinePos = post?.underlinePosition ?? -font.unitsPerEm * 0.1;
   const underlineThickness =
-    fontMetrics.underlineThickness ?? Math.max(1, font.unitsPerEm * 0.05);
-  const strikeoutPos = fontMetrics.strikeoutPosition ?? -font.unitsPerEm * 0.3;
+    post?.underlineThickness ?? Math.max(1, font.unitsPerEm * 0.05);
+  const strikeoutPos = os2?.yStrikeoutPosition ?? -font.unitsPerEm * 0.3;
   const strikeoutThickness =
-    fontMetrics.strikeoutThickness ?? Math.max(1, font.unitsPerEm * 0.05);
+    os2?.yStrikeoutSize ?? Math.max(1, font.unitsPerEm * 0.05);
 
   return {
     syntheticBold,

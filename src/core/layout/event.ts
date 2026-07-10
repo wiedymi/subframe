@@ -1,7 +1,7 @@
 import type { SubtitleDocument, SubtitleEvent } from "subforge/core";
 import { GlyphBuffer } from "text-shaper";
 import type { FrameContext } from "../data/types";
-import { getFontForStyle } from "../../io/fonts/cache";
+import { getFontRegistry, type FontRegistry } from "../../io/fonts/cache";
 import { quantSubpixel } from "../math/fixed";
 import {
   resolveOutlineColor,
@@ -80,7 +80,11 @@ function getShapedRunCache(font: object, key: string): GlyphBuffer | null {
   return value;
 }
 
-function setShapedRunCache(font: object, key: string, value: GlyphBuffer): void {
+function setShapedRunCache(
+  font: object,
+  key: string,
+  value: GlyphBuffer,
+): void {
   let map = shapedRunCache.get(font);
   if (!map) {
     map = new Map();
@@ -104,8 +108,12 @@ const DRAWING_PATH_CACHE = new Map<
 
 // Mutable ceilings (limits/stats only; no rendering-semantics change). Undefined
 // leaves a ceiling untouched.
-export function setLayoutCacheLimits(limits: { shapedRun?: number; drawingPath?: number }): void {
-  if (limits.shapedRun !== undefined) SHAPED_RUN_CACHE_LIMIT = Math.max(0, limits.shapedRun);
+export function setLayoutCacheLimits(limits: {
+  shapedRun?: number;
+  drawingPath?: number;
+}): void {
+  if (limits.shapedRun !== undefined)
+    SHAPED_RUN_CACHE_LIMIT = Math.max(0, limits.shapedRun);
   if (limits.drawingPath !== undefined) {
     DRAWING_PATH_CACHE_LIMIT = Math.max(0, limits.drawingPath);
     while (DRAWING_PATH_CACHE.size > DRAWING_PATH_CACHE_LIMIT) {
@@ -122,7 +130,10 @@ export function getLayoutCacheStats(): {
 } {
   return {
     drawingPathEntries: DRAWING_PATH_CACHE.size,
-    limits: { shapedRun: SHAPED_RUN_CACHE_LIMIT, drawingPath: DRAWING_PATH_CACHE_LIMIT },
+    limits: {
+      shapedRun: SHAPED_RUN_CACHE_LIMIT,
+      drawingPath: DRAWING_PATH_CACHE_LIMIT,
+    },
   };
 }
 
@@ -237,7 +248,9 @@ function animateAffectsLayout(target: {
   );
 }
 
-function hasTimeVariantEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+function hasTimeVariantEffects(
+  segments: ReturnType<typeof resolveSegments>,
+): boolean {
   for (let s = 0; s < segments.length; s++) {
     const effects = segments[s]!.effects;
     if (!effects || effects.length === 0) continue;
@@ -277,7 +290,9 @@ function animateAffectsColor(target: {
   );
 }
 
-function hasKaraokeEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+function hasKaraokeEffects(
+  segments: ReturnType<typeof resolveSegments>,
+): boolean {
   for (let s = 0; s < segments.length; s++) {
     const effects = segments[s]!.effects;
     if (!effects || effects.length === 0) continue;
@@ -289,7 +304,9 @@ function hasKaraokeEffects(segments: ReturnType<typeof resolveSegments>): boolea
   return false;
 }
 
-function hasColorVariantEffects(segments: ReturnType<typeof resolveSegments>): boolean {
+function hasColorVariantEffects(
+  segments: ReturnType<typeof resolveSegments>,
+): boolean {
   for (let s = 0; s < segments.length; s++) {
     const effects = segments[s]!.effects;
     if (!effects || effects.length === 0) continue;
@@ -341,7 +358,7 @@ function reorderTokensForBidi(
   return out;
 }
 
-type LayoutFontHandle = Awaited<ReturnType<typeof getFontForStyle>>;
+type LayoutFontHandle = Awaited<ReturnType<FontRegistry["getFontForStyle"]>>;
 
 // A shaped span assigned to one line item: a font-run's glyphs sliced to a
 // single token. `shaped` shares glyph objects with the retained whole-run
@@ -449,7 +466,7 @@ async function buildLtrTokenRuns(
     // Map each glyph's cluster (codepoint index within fr.text) to an
     // absolute code-unit offset within `part`.
     const cpToCU: number[] = [];
-    for (let c = 0; c < fr.text.length; ) {
+    for (let c = 0; c < fr.text.length;) {
       const cp = fr.text.codePointAt(c) ?? 0;
       cpToCU[cpToCU.length] = c;
       c += cp >= 0x10000 ? 2 : 1;
@@ -461,7 +478,13 @@ async function buildLtrTokenRuns(
       const cu = cl >= 0 && cl < cpToCU.length ? cpToCU[cl]! : 0;
       glyphCU[g] = startCU + cu;
     }
-    runShapes[runShapes.length] = { font: fr.font, startCU, endCU, shaped, glyphCU };
+    runShapes[runShapes.length] = {
+      font: fr.font,
+      startCU,
+      endCU,
+      shaped,
+      glyphCU,
+    };
   }
 
   const out: ShapedRunSpec[][] = new Array(tokens.length);
@@ -499,7 +522,7 @@ async function buildLtrTokenRuns(
 }
 
 function findSampleCodepoint(text: string): number | null {
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const cp = text.codePointAt(i) ?? 0;
     if (cp !== 0 && cp !== 10 && cp !== 13) return cp;
     i += cp >= 0x10000 ? 2 : 1;
@@ -522,6 +545,7 @@ export type EventLayoutInput = {
   fitHeight: number;
   shapeCtx: ShapeContext;
   usedGlyphBuffers: GlyphBuffer[];
+  fontRegistry?: FontRegistry;
 };
 
 export type EventLayoutResult = {
@@ -547,7 +571,9 @@ export type EventLayoutResult = {
   layerCacheMode: "none" | "static" | "tint";
 };
 
-export async function buildEventLayout(input: EventLayoutInput): Promise<EventLayoutResult | null> {
+export async function buildEventLayout(
+  input: EventLayoutInput,
+): Promise<EventLayoutResult | null> {
   const {
     doc,
     ev,
@@ -563,6 +589,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     fitHeight,
     shapeCtx,
     usedGlyphBuffers,
+    fontRegistry = getFontRegistry(doc),
   } = input;
 
   // ASS Kerning defaults to false (libass track->Kerning=0 when the
@@ -639,8 +666,10 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     return false;
   });
   const useMargins = true;
-  const fontScrW = (!hasHardOverrides && useMargins) ? fitWidth : baseContentWidth;
-  const fontScrH = (!hasHardOverrides && useMargins) ? fitHeight : baseContentHeight;
+  const fontScrW =
+    !hasHardOverrides && useMargins ? fitWidth : baseContentWidth;
+  const fontScrH =
+    !hasHardOverrides && useMargins ? fitHeight : baseContentHeight;
   const screenScaleX = fontScrW / playResX;
   const screenScaleY = fontScrH / playResY;
   const safeScreenScaleX =
@@ -655,8 +684,12 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     storageWidth?: number;
     storageHeight?: number;
   };
-  let layoutResX = Number.isFinite(info.layoutResX) ? (info.layoutResX as number) : 0;
-  let layoutResY = Number.isFinite(info.layoutResY) ? (info.layoutResY as number) : 0;
+  let layoutResX = Number.isFinite(info.layoutResX)
+    ? (info.layoutResX as number)
+    : 0;
+  let layoutResY = Number.isFinite(info.layoutResY)
+    ? (info.layoutResY as number)
+    : 0;
   if (!(layoutResX > 0 && layoutResY > 0)) {
     const storageWidth = Number.isFinite(info.storageWidth)
       ? (info.storageWidth as number)
@@ -787,8 +820,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
       posY = toScreenY(inlineStyle.pos[1]);
       posSeq = seq++;
     }
-    if (inlineStyle?.wrapStyle !== undefined)
-      wrapStyle = inlineStyle.wrapStyle;
+    if (inlineStyle?.wrapStyle !== undefined) wrapStyle = inlineStyle.wrapStyle;
     if (segEffects && segEffects.length > 0) {
       const found = findMoveEffect(segEffects);
       if (found) {
@@ -924,7 +956,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     let fontSize = inlineStyle?.fontSize ?? baseStyle.fontSize;
     const sampleCodepoint = findSampleCodepoint(seg.text);
     const fontStart = isProfiling() ? profileNow() : 0;
-    const font = await getFontForStyle(
+    const font = await fontRegistry.getFontForStyle(
       fontName,
       boldRequested,
       italicRequested,
@@ -1261,9 +1293,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
           const runScaleY = runFontScale * scaleYFactor;
           const useHinting =
             runFontStyle.fontHintingSupported && !runFontStyle.syntheticBold;
-          const boldStrength = runFontStyle.syntheticBold
-            ? fontSizePx / 64
-            : 0;
+          const boldStrength = runFontStyle.syntheticBold ? fontSizePx / 64 : 0;
           const runMetrics = computeRunMetrics(
             runFont,
             shaped,
@@ -1305,7 +1335,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
               ascent: 0,
               descent: 0,
               height: 0,
-            cacheable: layoutCacheable,
+              cacheable: layoutCacheable,
             };
           }
         }
@@ -1384,9 +1414,7 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
               currentLine.items[currentLine.items.length - 1]!,
             );
 
-          currentLine.width = quantSubpixel(
-            currentLine.width + record.width,
-          );
+          currentLine.width = quantSubpixel(currentLine.width + record.width);
           if (record.ascent > currentLine.ascent)
             currentLine.ascent = record.ascent;
           if (record.descent > currentLine.descent)
@@ -1535,7 +1563,6 @@ export async function buildEventLayout(input: EventLayoutInput): Promise<EventLa
     blockAnchorY = topY + totalHeight;
   }
   blockAnchorY = quantSubpixel(blockAnchorY);
-
 
   const result = {
     lines,

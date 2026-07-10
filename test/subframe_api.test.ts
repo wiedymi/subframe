@@ -1,8 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { parseASS } from "subforge/ass";
-import {
-  Subframe,
-} from "../src";
+import { Subframe } from "../src";
 import {
   clearRegisteredFontSourcesForTests,
   resetFontCache,
@@ -186,19 +184,24 @@ test("Subframe font resolution prefers provided fonts over Local Font Access", a
   resetFontCache();
   const localBytes = await readFont(ARIAL_PATH);
   const providedBytes = await readFont(LATO_PATH);
-  const previousQuery = (globalThis as typeof globalThis & {
-    queryLocalFonts?: () => Promise<unknown[]>;
-  }).queryLocalFonts;
-  (globalThis as typeof globalThis & { queryLocalFonts?: () => Promise<unknown[]> }).queryLocalFonts =
-    async () => [
-      {
-        family: "Lato",
-        fullName: "Lato Regular",
-        postscriptName: "Lato-Regular",
-        style: "Regular",
-        blob: async () => new Blob([localBytes]),
-      },
-    ];
+  const previousQuery = (
+    globalThis as typeof globalThis & {
+      queryLocalFonts?: () => Promise<unknown[]>;
+    }
+  ).queryLocalFonts;
+  (
+    globalThis as typeof globalThis & {
+      queryLocalFonts?: () => Promise<unknown[]>;
+    }
+  ).queryLocalFonts = async () => [
+    {
+      family: "Lato",
+      fullName: "Lato Regular",
+      postscriptName: "Lato-Regular",
+      style: "Regular",
+      blob: async () => new Blob([localBytes]),
+    },
+  ];
   const sf = new Subframe({ workers: false, fonts: [providedBytes] });
   try {
     await sf.ready;
@@ -213,21 +216,28 @@ test("Subframe font resolution prefers provided fonts over Local Font Access", a
   } finally {
     sf.dispose();
     if (previousQuery) {
-      (globalThis as typeof globalThis & { queryLocalFonts?: () => Promise<unknown[]> }).queryLocalFonts =
-        previousQuery;
+      (
+        globalThis as typeof globalThis & {
+          queryLocalFonts?: () => Promise<unknown[]>;
+        }
+      ).queryLocalFonts = previousQuery;
     } else {
-      delete (globalThis as typeof globalThis & { queryLocalFonts?: () => Promise<unknown[]> })
-        .queryLocalFonts;
+      delete (
+        globalThis as typeof globalThis & {
+          queryLocalFonts?: () => Promise<unknown[]>;
+        }
+      ).queryLocalFonts;
     }
     resetLocalFontAccessForTests();
   }
 });
 
-test("Subframe disposal unregisters instance-owned font aliases", async () => {
+test("Subframe keeps instance-owned font aliases out of the global registry", async () => {
   const bytes = await readFont(LATO_PATH);
   const sf = new Subframe({ workers: false, fonts: [bytes] });
   await sf.ready;
-  expect(snapshotFontSources().length).toBeGreaterThan(0);
+  expect(sf.stats().fonts.providedFonts).toBe(1);
+  expect(snapshotFontSources()).toHaveLength(0);
   sf.dispose();
   expect(snapshotFontSources()).toHaveLength(0);
 });
@@ -238,35 +248,221 @@ test("switching to a document without embedded fonts removes old aliases", async
   try {
     await sf.ready;
     sf.resize(320, 180);
-    const embeddedDoc = basicDocument("ArialMT") as ReturnType<typeof basicDocument> & {
+    const embeddedDoc = basicDocument("ArialMT") as ReturnType<
+      typeof basicDocument
+    > & {
       fonts?: Array<{ name: string; data: string }>;
     };
-    embeddedDoc.fonts = [{ name: "arial.ttf", data: encodeAssEmbeddedFont(bytes) }];
+    embeddedDoc.fonts = [
+      { name: "arial.ttf", data: encodeAssEmbeddedFont(bytes) },
+    ];
     sf.setDocument(embeddedDoc);
     (await sf.frame(1000)).release();
-    expect(snapshotFontSources().length).toBeGreaterThan(0);
+    expect(sf.stats().fonts.embeddedFonts).toBe(1);
+    expect(snapshotFontSources()).toHaveLength(0);
 
     sf.setDocument(basicDocument("Arial"));
     (await sf.frame(1000)).release();
+    expect(sf.stats().fonts.embeddedFonts).toBe(0);
     expect(snapshotFontSources()).toHaveLength(0);
   } finally {
     sf.dispose();
   }
 });
 
-test("Subframe enforces one live instance", async () => {
+test("Subframe instances render independently and survive peer disposal", async () => {
   const first = new Subframe({ workers: false });
+  const second = new Subframe({ workers: false });
   try {
-    await first.ready;
-    expect(() => new Subframe({ workers: false })).toThrow(
-      "one Subframe instance per page for now",
-    );
+    await Promise.all([first.ready, second.ready]);
+    first.resize(320, 180);
+    second.resize(640, 360);
+    await Promise.all([
+      first.setDocument(basicDocument("Arial")),
+      second.setDocument(basicDocument("Lato")),
+    ]);
+    const [firstFrame, secondFrame] = await Promise.all([
+      first.frame(1000),
+      second.frame(1000),
+    ]);
+    expect(firstFrame.frame.width).toBe(320);
+    expect(secondFrame.frame.width).toBe(640);
+    expect(firstFrame.layers.length).toBeGreaterThan(0);
+    expect(secondFrame.layers.length).toBeGreaterThan(0);
+    firstFrame.release();
+    secondFrame.release();
+
+    first.dispose();
+    const survivingFrame = await second.frame(1000);
+    expect(survivingFrame.frame.width).toBe(640);
+    expect(survivingFrame.layers.length).toBeGreaterThan(0);
+    survivingFrame.release();
   } finally {
     first.dispose();
+    second.dispose();
   }
-  const second = new Subframe({ workers: false });
-  await second.ready;
-  second.dispose();
+});
+
+test("Subframe font registries isolate the same alias across instances", async () => {
+  const [arial, lato] = await Promise.all([
+    readFont(ARIAL_PATH),
+    readFont(LATO_PATH),
+  ]);
+  const first = new Subframe({ workers: false, fonts: { Shared: arial } });
+  const second = new Subframe({ workers: false, fonts: { Shared: lato } });
+  try {
+    await Promise.all([first.ready, second.ready]);
+    first.resize(320, 180);
+    second.resize(320, 180);
+    await Promise.all([
+      first.setDocument(basicDocument("Shared")),
+      second.setDocument(basicDocument("Shared")),
+    ]);
+    const [firstFrame, secondFrame] = await Promise.all([
+      first.frame(1000),
+      second.frame(1000),
+    ]);
+    const checksum = (frame: typeof firstFrame): number => {
+      let hash = 0x811c9dc5;
+      for (let l = 0; l < frame.layers.length; l++) {
+        const bytes = frame.layers[l]!.bitmap;
+        for (let i = 0; i < bytes.length; i++) {
+          hash = Math.imul(hash ^ bytes[i]!, 0x01000193) >>> 0;
+        }
+      }
+      return hash;
+    };
+    expect(checksum(firstFrame)).not.toBe(checksum(secondFrame));
+    firstFrame.release();
+    secondFrame.release();
+  } finally {
+    first.dispose();
+    second.dispose();
+  }
+});
+
+test("worker-enabled Subframe instances own independent pools and font registries", async () => {
+  const [arial, lato] = await Promise.all([
+    readFont(ARIAL_PATH),
+    readFont(LATO_PATH),
+  ]);
+  const first = new Subframe({
+    workerCount: 1,
+    fonts: { Shared: arial },
+  });
+  const second = new Subframe({
+    workerCount: 1,
+    fonts: { Shared: lato },
+  });
+  const checksum = (frame: Awaited<ReturnType<Subframe["frame"]>>): number => {
+    let hash = 0x811c9dc5;
+    for (let l = 0; l < frame.layers.length; l++) {
+      const bytes = frame.layers[l]!.bitmap;
+      for (let i = 0; i < bytes.length; i++) {
+        hash = Math.imul(hash ^ bytes[i]!, 0x01000193) >>> 0;
+      }
+    }
+    return hash;
+  };
+  try {
+    await Promise.all([first.ready, second.ready]);
+    first.resize(320, 180);
+    second.resize(320, 180);
+    await Promise.all([
+      first.setDocument(basicDocument("Shared"), { timeMs: 1000 }),
+      second.setDocument(basicDocument("Shared"), { timeMs: 1000 }),
+    ]);
+    const [firstFrame, secondFrame] = await Promise.all([
+      first.frame(1000),
+      second.frame(1000),
+    ]);
+    expect(checksum(firstFrame)).not.toBe(checksum(secondFrame));
+    expect(first.stats().workerPool.workers).toBe(1);
+    expect(second.stats().workerPool.workers).toBe(1);
+    firstFrame.release();
+    secondFrame.release();
+
+    first.dispose();
+    expect(second.stats().workerPool.active).toBe(true);
+    const survivingFrame = await second.frame(1000 + 1000 / 60);
+    expect(survivingFrame.layers.length).toBeGreaterThan(0);
+    survivingFrame.release();
+  } finally {
+    first.dispose();
+    second.dispose();
+  }
+});
+
+test("instance worker output matches the direct renderer", async () => {
+  const lato = await readFont(LATO_PATH);
+  const direct = new Subframe({ workers: false, fonts: { Shared: lato } });
+  const threaded = new Subframe({
+    workerCount: 1,
+    fonts: { Shared: lato },
+  });
+  try {
+    await Promise.all([direct.ready, threaded.ready]);
+    direct.resize(320, 180);
+    threaded.resize(320, 180);
+    await Promise.all([
+      direct.setDocument(basicDocument("Shared"), { timeMs: 1000 }),
+      threaded.setDocument(basicDocument("Shared"), { timeMs: 1000 }),
+    ]);
+    const [expected, actual] = await Promise.all([
+      direct.frame(1000),
+      threaded.frame(1000),
+    ]);
+    expect(actual.layers).toHaveLength(expected.layers.length);
+    for (let i = 0; i < expected.layers.length; i++) {
+      const a = actual.layers[i]!;
+      const e = expected.layers[i]!;
+      expect({
+        width: a.width,
+        height: a.height,
+        originX: a.originX,
+        originY: a.originY,
+        color: a.color,
+        z: a.z,
+      }).toEqual({
+        width: e.width,
+        height: e.height,
+        originX: e.originX,
+        originY: e.originY,
+        color: e.color,
+        z: e.z,
+      });
+      expect(Buffer.from(a.bitmap)).toEqual(Buffer.from(e.bitmap));
+    }
+    expected.release();
+    actual.release();
+  } finally {
+    direct.dispose();
+    threaded.dispose();
+  }
+});
+
+test("instance worker dedup retains static frame arenas until every consumer releases", async () => {
+  const lato = await readFont(LATO_PATH);
+  const sf = new Subframe({ workerCount: 1, fonts: { Shared: lato } });
+  try {
+    await sf.ready;
+    sf.resize(320, 180);
+    await sf.setDocument(basicDocument("Shared"), { timeMs: 1000 });
+
+    const first = await sf.frame(1000);
+    const expected = Buffer.from(first.layers[0]!.bitmap);
+    first.release();
+
+    const held = await sf.frame(1000 + 1000 / 60);
+    const next = await sf.frame(1000 + (2 * 1000) / 60);
+    expect(held.layers[0]!.bitmap).toBe(next.layers[0]!.bitmap);
+    next.release();
+    expect(Buffer.from(held.layers[0]!.bitmap)).toEqual(expected);
+    expect(sf.stats().pipeline.dedupHits).toBeGreaterThanOrEqual(2);
+    held.release();
+  } finally {
+    sf.dispose();
+  }
 });
 
 test("Subframe headless frame works under Bun with default workers", async () => {

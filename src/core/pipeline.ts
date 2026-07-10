@@ -3,7 +3,11 @@ import type { GlyphBuffer } from "text-shaper";
 import type { ArenaBuffer, FrameContext, BitmapLayer } from "./data/types";
 import type { TraceContext } from "./trace";
 import { createTraceContext, toFrameTrace } from "./trace";
-import { activeEventsAtTime, frameContextFromDocument, frameEventParams } from "./frame";
+import {
+  activeEventsAtTime,
+  frameContextFromDocument,
+  frameEventParams,
+} from "./frame";
 import {
   tryDispatchPrewarm,
   isWorkerPoolUsable,
@@ -23,7 +27,11 @@ import {
   type FrameResult,
   type SubsetPart,
 } from "./worker-pool";
-import { reassembleFrameArena, mergeScatterLayers, type SubsetLayers } from "./frame-arena";
+import {
+  reassembleFrameArena,
+  mergeScatterLayers,
+  type SubsetLayers,
+} from "./frame-arena";
 import { createShapeContext, releaseGlyphBuffer } from "./shape/shaper";
 import {
   renderEvent,
@@ -34,16 +42,35 @@ import {
   isEventFullyStaticForFrameDedup,
   recordEventOrdinalStaticVerdicts,
 } from "./pipeline/event";
-import { endFrameProfile, setEventCount, setLayerCount, startFrameProfile } from "./profile";
-import { getFontForStyle } from "../io/fonts/cache";
-export { getEventLayerCacheStats, clearEventLayerCache } from "./pipeline/event";
+import {
+  endFrameProfile,
+  setEventCount,
+  setLayerCount,
+  startFrameProfile,
+} from "./profile";
+import {
+  bindFontRegistry,
+  defaultFontRegistry,
+  getFontRegistry,
+  type FontRegistry,
+} from "../io/fonts/cache";
+export {
+  getEventLayerCacheStats,
+  clearEventLayerCache,
+} from "./pipeline/event";
 export {
   isEventCacheReusable,
   setEventCacheReuseGate,
   getEventCacheReuseGate,
 } from "./pipeline/event";
 export { clearRasterCaches } from "./raster/event";
-export { setGpuFilterProvider, getGpuFilterProvider, setGpuFilterDeferEnabled, isGpuFilterDeferEnabled, type GpuFilterProvider } from "./filters/gpu-provider";
+export {
+  setGpuFilterProvider,
+  getGpuFilterProvider,
+  setGpuFilterDeferEnabled,
+  isGpuFilterDeferEnabled,
+  type GpuFilterProvider,
+} from "./filters/gpu-provider";
 export {
   setWorkerPool,
   setWorkerSource,
@@ -72,7 +99,11 @@ const EMPTY_ARENA_REFS: ArenaRef[] = [];
 const PUBLIC_RESULT_HELD = new WeakMap<RenderResult, boolean>();
 let lastReturnedResult: RenderResult | null = null;
 
-function makeArenaRef(buffer: ArenaBuffer, workerId: number, sabSlotIdx?: number): ArenaRef {
+function makeArenaRef(
+  buffer: ArenaBuffer,
+  workerId: number,
+  sabSlotIdx?: number,
+): ArenaRef {
   return {
     buffer,
     workerId,
@@ -95,7 +126,9 @@ function copyArenaRefs(from: RenderResult, to: RenderResult): RenderResult {
 }
 
 function arenaRefsFor(result: RenderResult | null): ArenaRef[] {
-  return result ? (RESULT_ARENAS.get(result) ?? EMPTY_ARENA_REFS) : EMPTY_ARENA_REFS;
+  return result
+    ? (RESULT_ARENAS.get(result) ?? EMPTY_ARENA_REFS)
+    : EMPTY_ARENA_REFS;
 }
 
 function recycleArenaRef(ref: ArenaRef): void {
@@ -150,7 +183,9 @@ function retainPublicResult(result: RenderResult): void {
   PUBLIC_RESULT_HELD.set(result, true);
 }
 
-export function releaseRenderResult(result: RenderResult | null | undefined): void {
+export function releaseRenderResult(
+  result: RenderResult | null | undefined,
+): void {
   if (!result || PUBLIC_RESULT_HELD.get(result) !== true) return;
   PUBLIC_RESULT_HELD.set(result, false);
   const refs = arenaRefsFor(result);
@@ -218,7 +253,9 @@ const BOUNDARY_LOOKAHEAD_MS = 250;
 const BOUNDARY_PIPELINE_DEPTH = 2;
 const BOUNDARY_SUSTAINED_PIPELINE_DEPTH = 3;
 const BOUNDARY_CONCURRENCY = (() => {
-  const env = Number((globalThis as any)?.process?.env?.SUBFRAME_BOUNDARY_CONCURRENCY);
+  const env = Number(
+    (globalThis as any)?.process?.env?.SUBFRAME_BOUNDARY_CONCURRENCY,
+  );
   if (Number.isFinite(env)) return env <= 1 ? 1 : 2;
   return 2;
 })();
@@ -397,7 +434,10 @@ function nextBoundaryAfter(doc: SubtitleDocument, timeMs: number): number {
   return lo < boundaries.length ? boundaries[lo]! : Number.POSITIVE_INFINITY;
 }
 
-function nextActiveSetBoundaryAfter(doc: SubtitleDocument, timeMs: number): number {
+function nextActiveSetBoundaryAfter(
+  doc: SubtitleDocument,
+  timeMs: number,
+): number {
   const baseEvents = activeEventsAtTime(doc, timeMs);
   let cursor = timeMs;
   for (;;) {
@@ -541,7 +581,10 @@ function pruneBoundarySlotsForSchedule(
       const hadResult = !!slot.result;
       removeBoundarySlotAt(i);
       boundaryStale++;
-      sampleBoundaryTiming(slot, hadResult ? "schedule-stale-ready" : "schedule-stale-inflight");
+      sampleBoundaryTiming(
+        slot,
+        hadResult ? "schedule-stale-ready" : "schedule-stale-inflight",
+      );
     } else if (slot.timeMs - pruneMs > BOUNDARY_LOOKAHEAD_MS) {
       removeBoundarySlotAt(i);
     }
@@ -613,7 +656,8 @@ function discardDueBoundarySlots(
     if (slot === keep) continue;
     if (slot.timeMs > timeMs + RING_MATCH_EPS_MS) continue;
     const hadResult = !!slot.result;
-    const mismatched = hadResult && !sameActiveEventSet(slot.activeEvents, activeEvents);
+    const mismatched =
+      hadResult && !sameActiveEventSet(slot.activeEvents, activeEvents);
     removeBoundarySlotAt(i);
     boundaryStale++;
     sampleBoundaryTiming(slot, hadResult ? "stale-ready" : "stale-inflight");
@@ -758,7 +802,11 @@ async function awaitBoundaryFrame(
   }
   if (!slot) return null;
   const deadline = performance.now() + ringAwaitMaxMs();
-  while (boundarySlotIndex(slot) !== -1 && slot.promise && performance.now() < deadline) {
+  while (
+    boundarySlotIndex(slot) !== -1 &&
+    slot.promise &&
+    performance.now() < deadline
+  ) {
     pumpWorkerPool();
     await macrotaskYield();
   }
@@ -850,6 +898,7 @@ async function renderFrameInternal(
   const layers: BitmapLayer[] = [];
   const shapeCtx = createShapeContext();
   const usedGlyphBuffers: GlyphBuffer[] = [];
+  const fontRegistry = getFontRegistry(doc);
 
   const eventCtx = {
     doc,
@@ -867,6 +916,7 @@ async function renderFrameInternal(
     shapeCtx,
     usedGlyphBuffers,
     traceCtx,
+    fontRegistry,
   };
 
   for (let e = 0; e < activeEvents.length; e++) {
@@ -890,9 +940,12 @@ async function renderFrameInternal(
     const done = endFrameProfile();
     if (done) {
       const blurPct = done.frameMs > 0 ? (done.blurMs / done.frameMs) * 100 : 0;
-      const layoutPct = done.frameMs > 0 ? (done.layoutMs / done.frameMs) * 100 : 0;
-      const rasterPct = done.frameMs > 0 ? (done.rasterMs / done.frameMs) * 100 : 0;
-      const shapePct = done.frameMs > 0 ? (done.shapeMs / done.frameMs) * 100 : 0;
+      const layoutPct =
+        done.frameMs > 0 ? (done.layoutMs / done.frameMs) * 100 : 0;
+      const rasterPct =
+        done.frameMs > 0 ? (done.rasterMs / done.frameMs) * 100 : 0;
+      const shapePct =
+        done.frameMs > 0 ? (done.shapeMs / done.frameMs) * 100 : 0;
       const fontPct = done.frameMs > 0 ? (done.fontMs / done.frameMs) * 100 : 0;
       console.log(
         `[subframe] frame=${done.frameMs.toFixed(2)}ms layout=${done.layoutMs.toFixed(2)}ms (${layoutPct.toFixed(
@@ -964,16 +1017,14 @@ function firstDocumentEventTime(doc: SubtitleDocument): number {
 }
 
 async function preResolveStyleFonts(doc: SubtitleDocument): Promise<void> {
+  const fontRegistry = getFontRegistry(doc);
   const pending: Promise<unknown>[] = [];
   for (const style of doc.styles.values()) {
     const boldValue = (style as { bold: boolean | number }).bold;
-    const bold =
-      typeof boldValue === "number" ? boldValue !== 0 : !!boldValue;
-    pending[pending.length] = getFontForStyle(
-      style.fontName,
-      bold,
-      !!style.italic,
-    ).catch(() => null);
+    const bold = typeof boldValue === "number" ? boldValue !== 0 : !!boldValue;
+    pending[pending.length] = fontRegistry
+      .getFontForStyle(style.fontName, bold, !!style.italic)
+      .catch(() => null);
   }
   if (pending.length > 0) await Promise.all(pending);
 }
@@ -988,7 +1039,10 @@ type DocumentWarmupState = {
   fontPromise: Promise<void> | null;
 };
 
-const documentWarmupState = new WeakMap<SubtitleDocument, DocumentWarmupState>();
+const documentWarmupState = new WeakMap<
+  SubtitleDocument,
+  DocumentWarmupState
+>();
 let prepareDocumentDepth = 0;
 
 function warmupStateFor(
@@ -1072,8 +1126,7 @@ export async function prepareDocument(
   height?: number,
   options: PrepareDocumentOptions | number = {},
 ): Promise<RenderResult | null> {
-  const opts =
-    typeof options === "number" ? { timeMs: options } : options;
+  const opts = typeof options === "number" ? { timeMs: options } : options;
   const timeMs = opts.timeMs ?? firstDocumentEventTime(doc);
   const frame = frameContextFromDocument(doc, timeMs, width, height);
   const fontPromise = preResolveStyleFonts(doc);
@@ -1090,7 +1143,9 @@ export async function prepareDocument(
   try {
     const result = await renderFrame(doc, timeMs, width, height);
     const boundaryWarmupMs =
-      opts.boundaryWarmupMs === undefined ? 250 : Math.max(0, opts.boundaryWarmupMs);
+      opts.boundaryWarmupMs === undefined
+        ? 250
+        : Math.max(0, opts.boundaryWarmupMs);
     if (boundaryWarmupMs > 0) {
       const deadline = performance.now() + boundaryWarmupMs;
       while (
@@ -1116,13 +1171,13 @@ export async function attachDocument(
   width?: number,
   height?: number,
   options: AttachDocumentOptions | number = {},
+  fontRegistry: FontRegistry = defaultFontRegistry,
 ): Promise<AttachDocumentStats> {
-  const opts =
-    typeof options === "number" ? { timeMs: options } : options;
+  bindFontRegistry(doc, fontRegistry);
+  const opts = typeof options === "number" ? { timeMs: options } : options;
   const timeMs = opts.timeMs ?? firstDocumentEventTime(doc);
   const fps = Number(opts.playbackFps);
-  const playbackDeltaMs =
-    Number.isFinite(fps) && fps > 0 ? 1000 / fps : 0;
+  const playbackDeltaMs = Number.isFinite(fps) && fps > 0 ? 1000 / fps : 0;
   // For playback attach, render the immediately-previous cadence point so the
   // first timed render at timeMs is a normal forward step. Preparing exactly at
   // timeMs makes that first public render look like a repeat/seek, which drops
@@ -1132,7 +1187,9 @@ export async function attachDocument(
       ? timeMs - playbackDeltaMs
       : timeMs;
   const warmupBudgetMs =
-    opts.boundaryWarmupMs === undefined ? 500 : Math.max(0, opts.boundaryWarmupMs);
+    opts.boundaryWarmupMs === undefined
+      ? 500
+      : Math.max(0, opts.boundaryWarmupMs);
   const totalStart = performance.now();
   const fontStart = totalStart;
   await preResolveStyleFonts(doc);
@@ -1157,9 +1214,15 @@ export async function attachDocument(
   if (playbackDeltaMs > 0 && workers > 0) {
     const primeStart = performance.now();
     const frame =
-      prepared?.frame ?? frameContextFromDocument(doc, prepareTimeMs, width, height);
+      prepared?.frame ??
+      frameContextFromDocument(doc, prepareTimeMs, width, height);
     if (frameDedupEnabled) {
-      const playbackFrame = frameContextFromDocument(doc, timeMs, width, height);
+      const playbackFrame = frameContextFromDocument(
+        doc,
+        timeMs,
+        width,
+        height,
+      );
       const activeEvents = activeEventsAtTime(doc, timeMs);
       if (activeEvents.length > 0 && allEventsFullyStatic(activeEvents)) {
         maybeStartBoundaryPrewarm(
@@ -1229,11 +1292,16 @@ export async function attachDocument(
 // first) keeps the deeper horizon from displacing entries still awaiting
 // their first read. Tunable via SUBFRAME_WORKER_LOOKAHEAD.
 const RENDER_AHEAD_WORKER_LOOKAHEAD_MS = (() => {
-  const env = Number((globalThis as any)?.process?.env?.SUBFRAME_WORKER_LOOKAHEAD);
+  const env = Number(
+    (globalThis as any)?.process?.env?.SUBFRAME_WORKER_LOOKAHEAD,
+  );
   return Number.isFinite(env) && env > 0 ? env : 8000;
 })();
 
-const PREWARM_ATTEMPTED = new WeakMap<SubtitleDocument, WeakSet<SubtitleEvent>>();
+const PREWARM_ATTEMPTED = new WeakMap<
+  SubtitleDocument,
+  WeakSet<SubtitleEvent>
+>();
 const prewarmLayers: BitmapLayer[] = [];
 const prewarmCandidates: SubtitleEvent[] = [];
 
@@ -1287,7 +1355,12 @@ function dispatchPrewarmToPool(
 ): void {
   if (shouldSuppressPrewarmForBoundary()) return;
   const attempted = prewarmAttemptedFor(doc);
-  collectPrewarmCandidates(doc, timeMs, RENDER_AHEAD_WORKER_LOOKAHEAD_MS, attempted);
+  collectPrewarmCandidates(
+    doc,
+    timeMs,
+    RENDER_AHEAD_WORKER_LOOKAHEAD_MS,
+    attempted,
+  );
   if (prewarmCandidates.length === 0) return;
   funnelNoteCandidates(prewarmCandidates);
   tryDispatchPrewarm(doc, prewarmCandidates, width, height, attempted, timeMs);
@@ -1377,14 +1450,36 @@ export async function renderFrame(
       }
       return setLastReturnedResult(reused);
     }
-    const parked = serveParkedBoundaryFrame(doc, timeMs, dedupContext, activeEvents);
+    const parked = serveParkedBoundaryFrame(
+      doc,
+      timeMs,
+      dedupContext,
+      activeEvents,
+    );
     if (parked) {
-      maybeStartBoundaryPrewarm(doc, timeMs, frame.width, frame.height, dedupContext);
+      maybeStartBoundaryPrewarm(
+        doc,
+        timeMs,
+        frame.width,
+        frame.height,
+        dedupContext,
+      );
       return setLastReturnedResult(parked);
     }
-    const awaited = await awaitBoundaryFrame(doc, timeMs, dedupContext, activeEvents);
+    const awaited = await awaitBoundaryFrame(
+      doc,
+      timeMs,
+      dedupContext,
+      activeEvents,
+    );
     if (awaited) {
-      maybeStartBoundaryPrewarm(doc, timeMs, frame.width, frame.height, dedupContext);
+      maybeStartBoundaryPrewarm(
+        doc,
+        timeMs,
+        frame.width,
+        frame.height,
+        dedupContext,
+      );
       return setLastReturnedResult(awaited);
     }
     if (previousStaticDedupContext(doc, dedupContext)) {
@@ -1397,7 +1492,13 @@ export async function renderFrame(
         // spends most of the ~40.6ms typeset window; firing before current work
         // is queued starves the frame being awaited. Queueing after dispatch
         // preserves current-frame priority while still buying one render period.
-        maybeStartBoundaryPrewarm(doc, timeMs, frame.width, frame.height, dedupContext!);
+        maybeStartBoundaryPrewarm(
+          doc,
+          timeMs,
+          frame.width,
+          frame.height,
+          dedupContext!,
+        );
       };
     }
   }
@@ -1439,7 +1540,11 @@ export async function renderFrame(
   }
   if (frameDedupEnabled && dedupContext)
     promoteFrameDedup(doc, dedupContext, result);
-  if (frameDedupEnabled && dedupContext && allEventsFullyStatic(result.activeEvents)) {
+  if (
+    frameDedupEnabled &&
+    dedupContext &&
+    allEventsFullyStatic(result.activeEvents)
+  ) {
     maybeStartBoundaryPrewarm(
       doc,
       timeMs,
@@ -1449,6 +1554,19 @@ export async function renderFrame(
     );
   }
   return setLastReturnedResult(result);
+}
+
+// Stateless facade path. It deliberately bypasses the module-level ring,
+// boundary scheduler, and shared worker pool so lifecycle owners can provide
+// their own scheduling/runtime isolation while reusing the exact layout and
+// raster pipeline.
+export async function renderFrameDirect(
+  doc: SubtitleDocument,
+  timeMs: number,
+  width?: number,
+  height?: number,
+): Promise<RenderResult> {
+  return renderFrameInternal(doc, timeMs, width, height);
 }
 
 // Single-thread deadline path + event-wise render-ahead prewarm. Unchanged from
@@ -1466,7 +1584,12 @@ async function renderFrameLegacy(
     if (isWorkerPoolUsable()) {
       // Dispatch to the pool every frame; it is cheap and must keep workers fed
       // even while an expensive frame renders on the main thread.
-      dispatchPrewarmToPool(doc, timeMs, result.frame.width, result.frame.height);
+      dispatchPrewarmToPool(
+        doc,
+        timeMs,
+        result.frame.width,
+        result.frame.height,
+      );
     } else {
       const budget = Math.min(
         RENDER_AHEAD_MAX_SLICE_MS,
@@ -1603,9 +1726,11 @@ function estimateEventCost(ev: SubtitleEvent): number {
 function noteEventCost(ev: SubtitleEvent, ms: number): void {
   if (!(ms >= 0) || !Number.isFinite(ms)) return;
   const prev = measuredEventCostEwma.get(ev);
-  const next = prev === undefined ? ms : prev + (ms - prev) * EVENT_COST_EWMA_ALPHA;
+  const next =
+    prev === undefined ? ms : prev + (ms - prev) * EVENT_COST_EWMA_ALPHA;
   measuredEventCostEwma.set(ev, next);
-  measuredCostMean += (ms - measuredCostMean) / Math.min(++measuredCostSamples, 256);
+  measuredCostMean +=
+    (ms - measuredCostMean) / Math.min(++measuredCostSamples, 256);
 }
 
 // Which worker slot an event is PINNED to. The scatter path's dominant cost is
@@ -1632,7 +1757,10 @@ function partitionEventsLPT(
   nWorkers: number,
 ): Int32Array[] {
   const k = activeEvents.length;
-  const loads = partitionLoadScratch.length >= nWorkers ? partitionLoadScratch : (partitionLoadScratch = new Float64Array(nWorkers));
+  const loads =
+    partitionLoadScratch.length >= nWorkers
+      ? partitionLoadScratch
+      : (partitionLoadScratch = new Float64Array(nWorkers));
   for (let w = 0; w < nWorkers; w++) loads[w] = 0;
   const cost = new Float64Array(k);
   const slot = new Int32Array(k);
@@ -1697,7 +1825,8 @@ async function renderFrameScatter(
 
   const subsets = partitionEventsLPT(activeEvents, n);
   let nonEmpty = 0;
-  for (let i = 0; i < subsets.length; i++) if (subsets[i]!.length > 0) nonEmpty++;
+  for (let i = 0; i < subsets.length; i++)
+    if (subsets[i]!.length > 0) nonEmpty++;
   scatterLastSubsets = nonEmpty;
 
   const parts = await scatterFrame(doc, timeMs, w, h, subsets, afterDispatch);
@@ -1716,7 +1845,11 @@ async function renderFrameScatter(
     const p = parts[i]!;
     if (p.ms > worstMs) worstMs = p.ms;
     if (p.arena.byteLength > 0) {
-      arenaRefs[arenaRefs.length] = makeArenaRef(p.arena, p.workerIdx, p.sabSlotIdx);
+      arenaRefs[arenaRefs.length] = makeArenaRef(
+        p.arena,
+        p.workerIdx,
+        p.sabSlotIdx,
+      );
     }
     const layers = reassembleFrameArena(p.arena, p.meta, p.count);
     // gpuGroupCounter is realm-local. Each worker starts at zero, but the
@@ -1752,7 +1885,10 @@ async function renderFrameScatter(
   // EMA of the scatter makespan (worst subset), the hybrid's guard reference:
   // it compares the ring's per-frame production time (frameCpuEmaMs / N) against
   // this to decide, on a miss, whether awaiting the ring or scattering is faster.
-  scatterMakespanEma = scatterMakespanEma === 0 ? worstMs : scatterMakespanEma + (worstMs - scatterMakespanEma) * 0.2;
+  scatterMakespanEma =
+    scatterMakespanEma === 0
+      ? worstMs
+      : scatterMakespanEma + (worstMs - scatterMakespanEma) * 0.2;
 
   const layers = sortLayersStable(mergeScatterLayers(subLayers));
   return attachArenaRefs({ layers, activeEvents, frame }, arenaRefs);
@@ -1894,7 +2030,8 @@ function recycleRawArena(
   sabSlotIdx?: number,
 ): void {
   if (!buffer || buffer.byteLength <= 0) return;
-  if (sabSlotIdx !== undefined) releaseSabArenaSlotToWorker(workerId, sabSlotIdx);
+  if (sabSlotIdx !== undefined)
+    releaseSabArenaSlotToWorker(workerId, sabSlotIdx);
   else returnArenaBufferToWorker(workerId, buffer as ArrayBuffer);
 }
 
@@ -2234,7 +2371,9 @@ async function renderFrameRing(
   if (hit) {
     ringHits++;
     seedRing(doc, timeMs, w, h);
-    const layers = sortLayersStable(reassembleFrameArena(hit.arena!, hit.meta!, hit.count));
+    const layers = sortLayersStable(
+      reassembleFrameArena(hit.arena!, hit.meta!, hit.count),
+    );
     return attachArenaRefs(
       {
         layers,
@@ -2368,7 +2507,8 @@ async function renderFrameHybrid(
   const period = ringDelta > 0 ? ringDelta : 1000 / 60;
   const ringWarm = tp.produced >= 3 * nWorkers;
   const ringGuardReady = ringWarm && tp.produced >= ringGuardGraceUntilProduced;
-  const ringUnsustainable = ringGuardReady && ringPerFrameMs > period * RING_SUSTAIN_MARGIN;
+  const ringUnsustainable =
+    ringGuardReady && ringPerFrameMs > period * RING_SUSTAIN_MARGIN;
   const ringLosing =
     ringUnsustainable ||
     (ringGuardReady &&
@@ -2379,7 +2519,9 @@ async function renderFrameHybrid(
   if (hit) {
     ringHits++;
     if (!ringLosing) seedRing(doc, timeMs, w, h); // stop refilling once losing
-    const layers = sortLayersStable(reassembleFrameArena(hit.arena!, hit.meta!, hit.count));
+    const layers = sortLayersStable(
+      reassembleFrameArena(hit.arena!, hit.meta!, hit.count),
+    );
     return attachArenaRefs(
       {
         layers,
@@ -2415,7 +2557,9 @@ async function renderFrameHybrid(
       ringHits++;
       ringAwaited++;
       seedRing(doc, timeMs, w, h);
-      const layers = sortLayersStable(reassembleFrameArena(hit.arena!, hit.meta!, hit.count));
+      const layers = sortLayersStable(
+        reassembleFrameArena(hit.arena!, hit.meta!, hit.count),
+      );
       return attachArenaRefs(
         {
           layers,
@@ -2431,7 +2575,13 @@ async function renderFrameHybrid(
   // floor). Re-seed only while the ring is still competitive.
   if (ringLosing) hybridRingConceded++;
   ringMisses++;
-  const result = await renderFrameScatter(doc, timeMs, w, h, afterScatterDispatch);
+  const result = await renderFrameScatter(
+    doc,
+    timeMs,
+    w,
+    h,
+    afterScatterDispatch,
+  );
   if (!ringLosing) seedRing(doc, timeMs, w, h);
   return result;
 }

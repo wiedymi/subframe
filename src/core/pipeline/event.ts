@@ -8,8 +8,13 @@ import { buildEventLayout, type EventLayoutResult } from "../layout/event";
 import { renderEventLines, type CacheLayerTemplate } from "../raster/event";
 import type { ColorRGBA } from "../data/types";
 import { applyAnimateColors } from "../animate/apply";
-import { applyFade, fadeFactorComplex, fadeFactorSimple } from "../animate/fade";
+import {
+  applyFade,
+  fadeFactorComplex,
+  fadeFactorSimple,
+} from "../animate/fade";
 import { addLayoutMs, addRasterMs, isProfiling, profileNow } from "../profile";
+import type { FontRegistry } from "../../io/fonts/cache";
 
 type CachedEntry =
   | {
@@ -66,7 +71,8 @@ let eventLayerThrashMissWindow = 0;
 // read, or previously-evicted events miss again. Returns whether the limit
 // grew (callers re-check their eviction condition).
 function maybeGrowEventLayerBytesLimit(): boolean {
-  if (EVENT_LAYER_CACHE_BYTES_LIMIT >= EVENT_LAYER_CACHE_BYTES_CEILING) return false;
+  if (EVENT_LAYER_CACHE_BYTES_LIMIT >= EVENT_LAYER_CACHE_BYTES_CEILING)
+    return false;
   if (
     eventLayerNeverHitEvictionWindow < EVENT_LAYER_GROW_THRESHOLD &&
     eventLayerThrashMissWindow < EVENT_LAYER_THRASH_THRESHOLD
@@ -92,7 +98,8 @@ function maybeGrowEventLayerBytesLimit(): boolean {
 // guaranteed deadline miss. Growing first is strictly better while headroom
 // remains.
 function growEventLayerBytesLimitForLiveEntry(): boolean {
-  if (EVENT_LAYER_CACHE_BYTES_LIMIT >= EVENT_LAYER_CACHE_BYTES_CEILING) return false;
+  if (EVENT_LAYER_CACHE_BYTES_LIMIT >= EVENT_LAYER_CACHE_BYTES_CEILING)
+    return false;
   EVENT_LAYER_CACHE_BYTES_LIMIT = Math.min(
     EVENT_LAYER_CACHE_BYTES_CEILING,
     Math.max(
@@ -114,7 +121,8 @@ function noteEventLayerMiss(ev: SubtitleEvent): void {
   eventLayerThrashMissWindow++;
   if (
     eventLayerThrashMissWindow >= EVENT_LAYER_THRASH_THRESHOLD &&
-    eventLayerCacheBytes > EVENT_LAYER_CACHE_BYTES_LIMIT - EVENT_LAYER_GROW_STEP_BYTES
+    eventLayerCacheBytes >
+      EVENT_LAYER_CACHE_BYTES_LIMIT - EVENT_LAYER_GROW_STEP_BYTES
   ) {
     maybeGrowEventLayerBytesLimit();
   }
@@ -132,18 +140,24 @@ export function setEventLayerCacheLimits(limits: {
   bytes?: number;
   bytesCeiling?: number;
 }): void {
-  if (limits.entries !== undefined) EVENT_LAYER_CACHE_LIMIT = Math.max(0, limits.entries);
+  if (limits.entries !== undefined)
+    EVENT_LAYER_CACHE_LIMIT = Math.max(0, limits.entries);
   if (limits.bytes !== undefined) {
     EVENT_LAYER_CACHE_BYTES_BASE = Math.max(0, limits.bytes);
     EVENT_LAYER_CACHE_BYTES_CEILING = Math.max(
       EVENT_LAYER_CACHE_BYTES_BASE,
-      limits.bytesCeiling !== undefined ? Math.max(0, limits.bytesCeiling) : EVENT_LAYER_CACHE_BYTES_BASE,
+      limits.bytesCeiling !== undefined
+        ? Math.max(0, limits.bytesCeiling)
+        : EVENT_LAYER_CACHE_BYTES_BASE,
     );
     EVENT_LAYER_CACHE_BYTES_LIMIT = EVENT_LAYER_CACHE_BYTES_BASE;
     eventLayerNeverHitEvictionWindow = 0;
     eventLayerThrashMissWindow = 0;
   } else if (limits.bytesCeiling !== undefined) {
-    EVENT_LAYER_CACHE_BYTES_CEILING = Math.max(EVENT_LAYER_CACHE_BYTES_BASE, Math.max(0, limits.bytesCeiling));
+    EVENT_LAYER_CACHE_BYTES_CEILING = Math.max(
+      EVENT_LAYER_CACHE_BYTES_BASE,
+      Math.max(0, limits.bytesCeiling),
+    );
     if (EVENT_LAYER_CACHE_BYTES_LIMIT > EVENT_LAYER_CACHE_BYTES_CEILING) {
       EVENT_LAYER_CACHE_BYTES_LIMIT = EVENT_LAYER_CACHE_BYTES_CEILING;
     }
@@ -453,7 +467,11 @@ export function funnelNoteDispatched(ev: SubtitleEvent): void {
   }
 }
 
-export function funnelNoteCompleted(ev: SubtitleEvent, ok: boolean, reason?: string): void {
+export function funnelNoteCompleted(
+  ev: SubtitleEvent,
+  ok: boolean,
+  reason?: string,
+): void {
   if (!FUNNEL_ENABLED) return;
   const rec = funnelRecFor(ev, true);
   if (rec.doneWall < 0) rec.doneWall = performance.now();
@@ -484,7 +502,10 @@ function funnelOutcome(rec: FunnelRec): FunnelOutcome {
   if (rec.firstRead === 1) return "HIT_IN_TIME";
   if (rec.firstRead === 2) {
     if (rec.candWall < 0) return "NEVER_CANDIDATE";
-    if (rec.evictedNeverHitWall >= 0 && rec.evictedNeverHitWall <= rec.firstReadWall) {
+    if (
+      rec.evictedNeverHitWall >= 0 &&
+      rec.evictedNeverHitWall <= rec.firstReadWall
+    ) {
       return "EVICTED_BEFORE_USE";
     }
     if (rec.dispWall < 0) return "NEVER_DISPATCHED";
@@ -606,7 +627,12 @@ function resolveItemColors(
   if (item.animates.length > 0) {
     const colorState = {
       primary: [primary[0], primary[1], primary[2], primary[3]] as ColorRGBA,
-      secondary: [secondary[0], secondary[1], secondary[2], secondary[3]] as ColorRGBA,
+      secondary: [
+        secondary[0],
+        secondary[1],
+        secondary[2],
+        secondary[3],
+      ] as ColorRGBA,
       outline: [outline[0], outline[1], outline[2], outline[3]] as ColorRGBA,
       shadow: [shadow[0], shadow[1], shadow[2], shadow[3]] as ColorRGBA,
     };
@@ -620,7 +646,7 @@ function resolveItemColors(
     ? fadeFactorComplex(timeMs, ev, item.fadeComplex)
     : item.fadeSimple
       ? fadeFactorSimple(timeMs, ev, item.fadeSimple.in, item.fadeSimple.out)
-      : item.fadeFactor ?? 1;
+      : (item.fadeFactor ?? 1);
   return {
     fillSolid: applyFade(primary, fade),
     fillPrimary: applyFade(primary, fade),
@@ -630,7 +656,10 @@ function resolveItemColors(
   };
 }
 
-function colorForRole(colors: ResolvedColors, role: CacheLayerTemplate["role"]): ColorRGBA {
+function colorForRole(
+  colors: ResolvedColors,
+  role: CacheLayerTemplate["role"],
+): ColorRGBA {
   switch (role) {
     case "fillPrimary":
       return colors.fillPrimary;
@@ -799,7 +828,9 @@ const CACHE_REUSE_MIN_MS_DEFAULT = 60;
 let cacheReuseGateEnabled =
   ((globalThis as any)?.process?.env?.SUBFRAME_CACHE_REUSE_GATE ?? "") !== "0";
 let cacheReuseMinMs = (() => {
-  const v = Number((globalThis as any)?.process?.env?.SUBFRAME_CACHE_REUSE_MIN_MS);
+  const v = Number(
+    (globalThis as any)?.process?.env?.SUBFRAME_CACHE_REUSE_MIN_MS,
+  );
   return Number.isFinite(v) && v > 0 ? v : CACHE_REUSE_MIN_MS_DEFAULT;
 })();
 
@@ -825,7 +856,10 @@ export function setEventCacheReuseGate(opts: {
   }
 }
 
-export function getEventCacheReuseGate(): { enabled: boolean; minReuseMs: number } {
+export function getEventCacheReuseGate(): {
+  enabled: boolean;
+  minReuseMs: number;
+} {
   return { enabled: cacheReuseGateEnabled, minReuseMs: cacheReuseMinMs };
 }
 
@@ -844,13 +878,17 @@ export type RenderEventContext = {
   layers: BitmapLayer[];
   shapeCtx: ShapeContext;
   usedGlyphBuffers: GlyphBuffer[];
+  fontRegistry?: FontRegistry;
   traceCtx?: TraceContext;
   // Inline render-ahead marks itself so funnel instrumentation only counts
   // live deadline-path reads. No effect on rendering.
   prewarm?: boolean;
 };
 
-export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): Promise<void> {
+export async function renderEvent(
+  ctx: RenderEventContext,
+  ev: SubtitleEvent,
+): Promise<void> {
   const {
     doc,
     frame,
@@ -867,6 +905,7 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
     shapeCtx,
     usedGlyphBuffers,
     traceCtx,
+    fontRegistry,
   } = ctx;
 
   const layoutStart = isProfiling() ? profileNow() : 0;
@@ -885,6 +924,7 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
     fitHeight,
     shapeCtx,
     usedGlyphBuffers,
+    fontRegistry,
   });
   if (isProfiling()) addLayoutMs(profileNow() - layoutStart);
   if (!layout) return;
@@ -917,7 +957,13 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
       if (cached.mode === "static") {
         pushCachedLayers(layers, cached.layers);
       } else {
-        pushTintCachedLayers(layers, cached.templates, layout.lines, ev, timeMs);
+        pushTintCachedLayers(
+          layers,
+          cached.templates,
+          layout.lines,
+          ev,
+          timeMs,
+        );
       }
       if (funnelLive) {
         const rec = funnelRecFor(ev, false);
@@ -963,7 +1009,17 @@ export async function renderEvent(ctx: RenderEventContext, ev: SubtitleEvent): P
     cacheable && cacheMode === "tint" ? [] : undefined;
   // Suppress GPU deferral for cacheable events (they cache their CPU blur and
   // reuse it) but never for trace renders (they must exercise the GPU path).
-  pushEventLayers(ev, frame, timeMs, layout, parScaleX, layers, traceEvent, cacheTemplates, cacheable && !traceCtx);
+  pushEventLayers(
+    ev,
+    frame,
+    timeMs,
+    layout,
+    parScaleX,
+    layers,
+    traceEvent,
+    cacheTemplates,
+    cacheable && !traceCtx,
+  );
   if (isProfiling()) addRasterMs(profileNow() - rasterStart);
 
   if (cacheable && layout.cacheKey) {
@@ -1029,6 +1085,7 @@ export async function renderEventForPrewarm(
     fitHeight: ctx.fitHeight,
     shapeCtx: ctx.shapeCtx,
     usedGlyphBuffers: ctx.usedGlyphBuffers,
+    fontRegistry: ctx.fontRegistry,
   });
   if (!layout) return null;
   const cacheMode = layout.layerCacheMode;
@@ -1038,8 +1095,25 @@ export async function renderEventForPrewarm(
     cacheMode === "tint" ? [] : undefined;
   // Prewarm output is always inserted into the cache, so never defer to the GPU
   // (workers have no GPU provider anyway; this keeps the entry cacheable).
-  pushEventLayers(ev, ctx.frame, ctx.timeMs, layout, ctx.parScaleX, layers, null, cacheTemplates, true);
-  return buildCachedEntry(ev, layout.cacheKey, cacheMode, layers, 0, cacheTemplates);
+  pushEventLayers(
+    ev,
+    ctx.frame,
+    ctx.timeMs,
+    layout,
+    ctx.parScaleX,
+    layers,
+    null,
+    cacheTemplates,
+    true,
+  );
+  return buildCachedEntry(
+    ev,
+    layout.cacheKey,
+    cacheMode,
+    layers,
+    0,
+    cacheTemplates,
+  );
 }
 
 // Insert a worker-produced entry into the event-layer cache. Validated exactly

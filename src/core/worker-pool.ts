@@ -13,7 +13,11 @@
 // setWorkerSource (URL/string/factory) for bundlers that do not serve the
 // sibling worker-entry module.
 import type { SubtitleDocument, SubtitleEvent } from "subforge/core";
-import type { ArenaBuffer, FrameArenaMessage, SubsetArenaMessage } from "./data/types";
+import type {
+  ArenaBuffer,
+  FrameArenaMessage,
+  SubsetArenaMessage,
+} from "./data/types";
 import {
   insertPrewarmedLayers,
   funnelNoteGateSkip,
@@ -22,10 +26,20 @@ import {
   getPrewarmFunnelStats,
   type PrewarmedEntry,
 } from "./pipeline/event";
-import { getFont, snapshotFontSources } from "../io/fonts/cache";
+import {
+  getFont,
+  getFontRegistry,
+  snapshotFontSources,
+} from "../io/fonts/cache";
 import { getFontSearchPaths } from "../io/fonts/resolve";
-import { getGpuFilterProvider, isGpuFilterDeferEnabled } from "./filters/gpu-provider";
-import { isAllocCensusEnabled, type AllocCensusSnapshot } from "./raster/bitmap";
+import {
+  getGpuFilterProvider,
+  isGpuFilterDeferEnabled,
+} from "./filters/gpu-provider";
+import {
+  isAllocCensusEnabled,
+  type AllocCensusSnapshot,
+} from "./raster/bitmap";
 
 // In-flight tasks per worker. Deep enough that a worker never drains its
 // queue between refills (pumpWorkerPool refills at frame start and between
@@ -127,23 +141,39 @@ function noteAllocCensus(data: WorkerHeapCarrier): void {
   }
 }
 
-function noteWorkerHeapSample(workerIdx: number, data: WorkerHeapCarrier): void {
+function noteWorkerHeapSample(
+  workerIdx: number,
+  data: WorkerHeapCarrier,
+): void {
   noteAllocCensus(data);
   const pw = workers[workerIdx];
   if (pw) {
-    if (typeof data.bitmapPoolBytes === "number") pw.bitmapPoolBytes = data.bitmapPoolBytes;
-    if (typeof data.bitmapPoolBuckets === "number") pw.bitmapPoolBuckets = data.bitmapPoolBuckets;
-    if (typeof data.bitmapPoolHits === "number") pw.bitmapPoolHits = data.bitmapPoolHits;
-    if (typeof data.bitmapPoolMisses === "number") pw.bitmapPoolMisses = data.bitmapPoolMisses;
-    if (typeof data.bitmapPoolReleased === "number") pw.bitmapPoolReleased = data.bitmapPoolReleased;
-    if (typeof data.bitmapPoolDropped === "number") pw.bitmapPoolDropped = data.bitmapPoolDropped;
-    if (typeof data.sabArenasEnabled === "boolean") pw.sabArenasEnabled = data.sabArenasEnabled;
-    if (typeof data.sabArenaPacked === "number") pw.sabArenaPacked = data.sabArenaPacked;
-    if (typeof data.sabArenaFallbacks === "number") pw.sabArenaFallbacks = data.sabArenaFallbacks;
-    if (typeof data.sabArenaGrows === "number") pw.sabArenaGrows = data.sabArenaGrows;
-    if (typeof data.sabArenaBytes === "number") pw.sabArenaBytes = data.sabArenaBytes;
-    if (typeof data.sabArenaHeldSlots === "number") pw.sabArenaHeldSlots = data.sabArenaHeldSlots;
-    if (typeof data.sabArenaAllocatedSlots === "number") pw.sabArenaAllocatedSlots = data.sabArenaAllocatedSlots;
+    if (typeof data.bitmapPoolBytes === "number")
+      pw.bitmapPoolBytes = data.bitmapPoolBytes;
+    if (typeof data.bitmapPoolBuckets === "number")
+      pw.bitmapPoolBuckets = data.bitmapPoolBuckets;
+    if (typeof data.bitmapPoolHits === "number")
+      pw.bitmapPoolHits = data.bitmapPoolHits;
+    if (typeof data.bitmapPoolMisses === "number")
+      pw.bitmapPoolMisses = data.bitmapPoolMisses;
+    if (typeof data.bitmapPoolReleased === "number")
+      pw.bitmapPoolReleased = data.bitmapPoolReleased;
+    if (typeof data.bitmapPoolDropped === "number")
+      pw.bitmapPoolDropped = data.bitmapPoolDropped;
+    if (typeof data.sabArenasEnabled === "boolean")
+      pw.sabArenasEnabled = data.sabArenasEnabled;
+    if (typeof data.sabArenaPacked === "number")
+      pw.sabArenaPacked = data.sabArenaPacked;
+    if (typeof data.sabArenaFallbacks === "number")
+      pw.sabArenaFallbacks = data.sabArenaFallbacks;
+    if (typeof data.sabArenaGrows === "number")
+      pw.sabArenaGrows = data.sabArenaGrows;
+    if (typeof data.sabArenaBytes === "number")
+      pw.sabArenaBytes = data.sabArenaBytes;
+    if (typeof data.sabArenaHeldSlots === "number")
+      pw.sabArenaHeldSlots = data.sabArenaHeldSlots;
+    if (typeof data.sabArenaAllocatedSlots === "number")
+      pw.sabArenaAllocatedSlots = data.sabArenaAllocatedSlots;
   }
   const used = data.workerHeapUsed;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0) return;
@@ -165,7 +195,8 @@ function workerGpuFiltersWanted(): boolean {
   // Only browser WebGPU compositing can consume deferred filters. Bun/Node keep
   // worker output CPU-final, which preserves the existing default fallback and
   // avoids enabling GPU metadata in CLI/test realms.
-  if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") return false;
+  if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined")
+    return false;
   return getGpuFilterProvider() !== null && isGpuFilterDeferEnabled();
 }
 
@@ -181,7 +212,10 @@ function sabArenasWanted(): boolean {
   const explicitlyEnabled = env === "1" || globalFlag === "1";
   if (!explicitlyEnabled) return false;
   if (typeof (globalThis as { Bun?: unknown }).Bun !== "undefined") return true;
-  return (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true;
+  return (
+    (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated ===
+    true
+  );
 }
 
 function syncWorkerGpuFilterProvider(): void {
@@ -214,7 +248,8 @@ let receiveMessageOnPortFn: ReceiveMessageOnPort | null | undefined;
 
 function getReceiveMessageOnPort(): ReceiveMessageOnPort | null {
   if (receiveMessageOnPortFn !== undefined) return receiveMessageOnPortFn;
-  const metaReq = (import.meta as any).require as undefined | ((id: string) => unknown);
+  const metaReq = (import.meta as any).require as
+    undefined | ((id: string) => unknown);
   const req = (globalThis as any).require ?? metaReq;
   if (typeof req !== "function") {
     receiveMessageOnPortFn = null;
@@ -225,7 +260,9 @@ function getReceiveMessageOnPort(): ReceiveMessageOnPort | null {
       receiveMessageOnPort?: ReceiveMessageOnPort;
     };
     receiveMessageOnPortFn =
-      typeof wt.receiveMessageOnPort === "function" ? wt.receiveMessageOnPort : null;
+      typeof wt.receiveMessageOnPort === "function"
+        ? wt.receiveMessageOnPort
+        : null;
   } catch {
     receiveMessageOnPortFn = null;
   }
@@ -252,12 +289,13 @@ function drainWorkerResults(): void {
       }
       if (!msg) break;
       const data = msg.message as
-        | (ResultMessage | FrameArenaMessage | SubsetArenaMessage)
-        | undefined;
+        (ResultMessage | FrameArenaMessage | SubsetArenaMessage) | undefined;
       if (!data) continue;
       if (data.type === "result") handleResult(data as ResultMessage);
-      else if (data.type === "frame") handleFrameResult(i, data as FrameArenaMessage);
-      else if (data.type === "subset") handleSubsetResult(i, data as SubsetArenaMessage);
+      else if (data.type === "frame")
+        handleFrameResult(i, data as FrameArenaMessage);
+      else if (data.type === "subset")
+        handleSubsetResult(i, data as SubsetArenaMessage);
     }
   }
   statDrainMsTotal += performance.now() - t0;
@@ -305,7 +343,8 @@ export function getFrameThroughputStats(): {
   inFlight: number;
 } {
   let inFlight = 0;
-  for (let i = 0; i < workers.length; i++) inFlight += workers[i]!.frameInFlight;
+  for (let i = 0; i < workers.length; i++)
+    inFlight += workers[i]!.frameInFlight;
   return {
     produced: frameProduced,
     errors: frameErrors,
@@ -342,7 +381,9 @@ let frameResultCb: ((r: FrameResult) => void) | null = null;
 let framePending = 0;
 
 // Install the scheduler's frame-result sink. Passing null detaches it.
-export function setFrameResultHandler(cb: ((r: FrameResult) => void) | null): void {
+export function setFrameResultHandler(
+  cb: ((r: FrameResult) => void) | null,
+): void {
   frameResultCb = cb;
 }
 
@@ -367,7 +408,8 @@ function handleFrameResult(workerIdx: number, data: FrameArenaMessage): void {
   }
   const cb = frameResultCb;
   if (!cb) {
-    if (!data.error) releaseArenaToWorker(workerIdx, data.arena, data.sabSlotIdx);
+    if (!data.error)
+      releaseArenaToWorker(workerIdx, data.arena, data.sabSlotIdx);
     return;
   }
   if (cb) {
@@ -436,7 +478,8 @@ export function pickFrameWorker(): number {
       bestLoad = load;
     }
   }
-  if (best < 0 || workers[best]!.frameInFlight >= FRAME_MAX_INFLIGHT_PER_WORKER) return -1;
+  if (best < 0 || workers[best]!.frameInFlight >= FRAME_MAX_INFLIGHT_PER_WORKER)
+    return -1;
   return best;
 }
 
@@ -456,10 +499,21 @@ export function sendFrameRequest(
   const docId = docIdFor(doc);
   try {
     if (!pw.docsSent.has(docId)) {
-      pw.worker.postMessage({ type: "doc", docId, doc });
+      pw.worker.postMessage({
+        type: "doc",
+        docId,
+        doc,
+        fontSources: getFontRegistry(doc).snapshot(),
+      });
       pw.docsSent.add(docId);
     }
-    pw.worker.postMessage({ type: "renderFrame", docId, timeMs, width, height });
+    pw.worker.postMessage({
+      type: "renderFrame",
+      docId,
+      timeMs,
+      width,
+      height,
+    });
     pw.frameInFlight++;
     framePending++;
     return true;
@@ -506,7 +560,10 @@ const scatterPending = new Map<number, ScatterPending>();
 // (crash / lost message): bail to the single-thread fallback after this wall.
 const SCATTER_TIMEOUT_MS = 2000;
 
-export function returnArenaBufferToWorker(workerIdx: number, buffer: ArrayBuffer): boolean {
+export function returnArenaBufferToWorker(
+  workerIdx: number,
+  buffer: ArrayBuffer,
+): boolean {
   if (buffer.byteLength <= 0) return false;
   if (
     typeof (globalThis as { Bun?: unknown }).Bun !== "undefined" &&
@@ -532,7 +589,9 @@ export function returnArenaBufferToWorker(workerIdx: number, buffer: ArrayBuffer
     return false;
   }
   try {
-    pw.worker.postMessage({ type: "arena-return", buffer }, [buffer as unknown as Transferable]);
+    pw.worker.postMessage({ type: "arena-return", buffer }, [
+      buffer as unknown as Transferable,
+    ]);
     pw.arenaFreeListMirror++;
     statArenaReturned++;
     return true;
@@ -542,7 +601,10 @@ export function returnArenaBufferToWorker(workerIdx: number, buffer: ArrayBuffer
   }
 }
 
-export function releaseSabArenaSlotToWorker(workerIdx: number, slotIdx: number): boolean {
+export function releaseSabArenaSlotToWorker(
+  workerIdx: number,
+  slotIdx: number,
+): boolean {
   if (slotIdx < 0) return false;
   const pw = workers[workerIdx];
   if (!pw || poolFailed) {
@@ -564,7 +626,8 @@ function releaseArenaToWorker(
   arena: ArenaBuffer,
   sabSlotIdx?: number,
 ): boolean {
-  if (sabSlotIdx !== undefined) return releaseSabArenaSlotToWorker(workerIdx, sabSlotIdx);
+  if (sabSlotIdx !== undefined)
+    return releaseSabArenaSlotToWorker(workerIdx, sabSlotIdx);
   return returnArenaBufferToWorker(workerIdx, arena as ArrayBuffer);
 }
 
@@ -714,7 +777,12 @@ export async function scatterFrame(
     const pw = workers[i % wc]!;
     try {
       if (!pw.docsSent.has(docId)) {
-        pw.worker.postMessage({ type: "doc", docId, doc });
+        pw.worker.postMessage({
+          type: "doc",
+          docId,
+          doc,
+          fontSources: getFontRegistry(doc).snapshot(),
+        });
         pw.docsSent.add(docId);
       }
       pw.worker.postMessage({
@@ -738,7 +806,8 @@ export async function scatterFrame(
 
   // Fork-join await: browsers deliver subset results via onmessage during the
   // yield; Bun/Node have no onmessage, so drain the ports each poll.
-  const needDrain = getReceiveMessageOnPort() !== null && syncResultDrainEnabled();
+  const needDrain =
+    getReceiveMessageOnPort() !== null && syncResultDrainEnabled();
   const t0 = performance.now();
   while (rec.received < rec.expected) {
     if (needDrain) drainWorkerResultsIfDue();
@@ -1073,7 +1142,10 @@ export function getWorkerPoolStats(): {
 
 // event -> index into doc.events, cached per events array so dispatch avoids an
 // O(n) indexOf per candidate.
-const eventIndexMaps = new WeakMap<SubtitleEvent[], Map<SubtitleEvent, number>>();
+const eventIndexMaps = new WeakMap<
+  SubtitleEvent[],
+  Map<SubtitleEvent, number>
+>();
 
 function eventIndexMap(events: SubtitleEvent[]): Map<SubtitleEvent, number> {
   let map = eventIndexMaps.get(events);
@@ -1141,7 +1213,8 @@ let pinnedWorkerCount: number | null = (() => {
   const env = envWorkers();
   if (env !== undefined && env !== "") {
     const n = Number(env);
-    if (Number.isFinite(n) && n > 0) return Math.min(Math.floor(n), MAX_POOL_SIZE);
+    if (Number.isFinite(n) && n > 0)
+      return Math.min(Math.floor(n), MAX_POOL_SIZE);
   }
   return null;
 })();
@@ -1172,7 +1245,8 @@ function workerCap(): number {
 // next dispatch reboots at the pinned size.
 export function setWorkerCount(n: number | null): void {
   if (n !== null && (!Number.isFinite(n) || n <= 0)) return;
-  pinnedWorkerCount = n === null ? null : Math.min(Math.floor(n), MAX_POOL_SIZE);
+  pinnedWorkerCount =
+    n === null ? null : Math.min(Math.floor(n), MAX_POOL_SIZE);
   // Reboot a live pool whenever its current size no longer matches the pinned
   // target — GROW as well as shrink. The old code only tore down on a shrink,
   // so pinning a LARGER count on a running pool (setWorkerCount(8) over a live
@@ -1261,10 +1335,12 @@ function handleResult(msg: ResultMessage): void {
     }
   } else {
     statNoEntry++;
-    const reason = typeof msg.reason === "string" ? msg.reason.slice(0, 200) : "unknown";
+    const reason =
+      typeof msg.reason === "string" ? msg.reason.slice(0, 200) : "unknown";
     const count = noEntryReasons.get(reason);
     if (count !== undefined) noEntryReasons.set(reason, count + 1);
-    else if (noEntryReasons.size < MAX_NO_ENTRY_REASONS) noEntryReasons.set(reason, 1);
+    else if (noEntryReasons.size < MAX_NO_ENTRY_REASONS)
+      noEntryReasons.set(reason, 1);
   }
 }
 
@@ -1273,7 +1349,10 @@ function handleResult(msg: ResultMessage): void {
 // resolver via getFont — resolvers that call registerFontSource (playground,
 // tools) make the source snapshotable — then answer the requesting worker with
 // the registered source, or null so its task fails cleanly instead of hanging.
-async function handleFontRequest(workerIndex: number, name: string): Promise<void> {
+async function handleFontRequest(
+  workerIndex: number,
+  name: string,
+): Promise<void> {
   if (typeof name !== "string" || name.length === 0) return;
   try {
     await getFont(name);
@@ -1554,7 +1633,12 @@ function refillFromBacklog(): void {
     const pw = workers[workerIndex]!;
     try {
       if (!pw.docsSent.has(b.docId)) {
-        pw.worker.postMessage({ type: "doc", docId: b.docId, doc: b.doc });
+        pw.worker.postMessage({
+          type: "doc",
+          docId: b.docId,
+          doc: b.doc,
+          fontSources: getFontRegistry(b.doc).snapshot(),
+        });
         pw.docsSent.add(b.docId);
       }
       const taskId = taskIdCounter++;
@@ -1568,7 +1652,12 @@ function refillFromBacklog(): void {
       });
       pw.inFlight++;
       statDispatched++;
-      pending.set(taskId, { ev, attempted: b.attempted, workerIndex, sentAt: performance.now() });
+      pending.set(taskId, {
+        ev,
+        attempted: b.attempted,
+        workerIndex,
+        sentAt: performance.now(),
+      });
       if (pending.size > statMaxPending) statMaxPending = pending.size;
       b.attempted.add(ev);
       funnelNoteDispatched(ev);
@@ -1654,7 +1743,14 @@ export function tryDispatchPrewarm(
   backlogEvents.length = 0;
   for (let i = 0; i < candidates.length; i++) backlogEvents[i] = candidates[i]!;
   backlogNext = 0;
-  backlog = { doc, docId, width, height, attempted, timeMs: haveClock ? timeMs! : -1 };
+  backlog = {
+    doc,
+    docId,
+    width,
+    height,
+    attempted,
+    timeMs: haveClock ? timeMs! : -1,
+  };
 
   // Fresh-backlog dispatch for this frame: measure whether the full candidate
   // set saturates the pool, then feed the once-per-frame auto-scale controller.

@@ -1,26 +1,22 @@
 import type { SubtitleDocument, SubtitleEvent } from "subforge/core";
 import type { BitmapLayer, FrameContext } from "./core/data/types";
+import { frameContextFromDocument } from "./core/frame";
 import type { CompositorBackend, CompositorStats } from "./backend/types";
 import { createWebGPUBackend } from "./backend/webgpu";
 import { createWebGLBackend } from "./backend/webgl";
 import {
-  attachDocument,
-  clearEventLayerCache,
-  clearRasterCaches,
+  type AttachDocumentStats,
   getEventLayerCacheStats,
-  getFramePipelineStats,
-  resetFramePipeline,
+  type getFramePipelineStats,
   releaseRenderResult,
-  renderFrame,
-  setWorkerPool,
-  setWorkerSource,
+  renderFrameDirect,
   type RenderResult,
 } from "./core/pipeline";
 import { getMemoryStats } from "./core/memory";
-import { getWorkerPoolStats } from "./core/worker-pool";
+import type { getWorkerPoolStats } from "./core/worker-pool";
 import {
-  registerScopedFontSource,
-  setFontResolver,
+  bindFontRegistry,
+  FontRegistry,
   type FontSource,
 } from "./io/fonts/cache";
 import {
@@ -39,6 +35,11 @@ import {
   type RenderAheadStats,
 } from "./player/render-ahead";
 import { INLINED_WORKER_CODE } from "./generated/worker-inline";
+import {
+  emptyInstancePipelineStats,
+  emptyInstanceWorkerPoolStats,
+  InstanceWorkerPool,
+} from "./core/instance-worker-pool";
 
 export type SubframeBackend = "auto" | "webgpu" | "webgl" | "cpu";
 
@@ -46,10 +47,11 @@ export type SubframeOptions = {
   canvas?: HTMLCanvasElement;
   backend?: SubframeBackend;
   fonts?:
-    | SubframeFontInput[]
-    | Record<string, ArrayBuffer | Uint8Array | string>;
+    SubframeFontInput[] | Record<string, ArrayBuffer | Uint8Array | string>;
   fontResolver?: (name: string) => Promise<ArrayBuffer | null>;
   workers?: boolean;
+  /** Maximum workers owned by this Subframe instance. Defaults to hardware concurrency, capped at 8. */
+  workerCount?: number;
   workerUrl?: string;
   onError?: (error: unknown) => void;
 };
@@ -94,12 +96,10 @@ export type SubframeStats = {
   width: number | undefined;
   height: number | undefined;
   hasDocument: boolean;
-  attach: Awaited<ReturnType<typeof attachDocument>> | null;
+  attach: AttachDocumentStats | null;
   backendFallbacks: Array<{ backend: "webgpu" | "webgl"; error: string }>;
   lastError: string | null;
 };
-
-let liveInstance: Subframe | null = null;
 
 function hasDom(): boolean {
   return typeof window !== "undefined" && typeof document !== "undefined";
@@ -109,7 +109,9 @@ function nowMs(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function requestDisplayFrame(cb: (ts: number, mediaTimeMs?: number) => void): void {
+function requestDisplayFrame(
+  cb: (ts: number, mediaTimeMs?: number) => void,
+): void {
   if (typeof requestAnimationFrame === "function") {
     requestAnimationFrame(cb);
   } else {
@@ -164,16 +166,16 @@ export class Subframe {
   private doc: SubtitleDocument | null = null;
   private docSeq = 0;
   private attachPromise: Promise<void> = Promise.resolve();
-  private lastAttachStats: Awaited<ReturnType<typeof attachDocument>> | null = null;
+  private lastAttachStats: AttachDocumentStats | null = null;
 
   private player: RenderAheadPlayer<InternalFrame> | null = null;
   private video: HTMLVideoElement | null = null;
   private videoCleanup: Array<() => void> = [];
   private lastPresentedFrame: InternalFrame | null = null;
   private disposed = false;
-  private installedWorkerSource = false;
+  private workerPool: InstanceWorkerPool | null = null;
   private disposeInlineWorkerSource: (() => void) | null = null;
-  private installedFontResolver = false;
+  private readonly fontRegistry = new FontRegistry();
   private embeddedFonts = new Map<string, ArrayBuffer>();
   private providedFonts = new Map<string, ArrayBuffer>();
   private legacyProvidedFonts = new Map<string, FontSource>();
@@ -197,10 +199,6 @@ export class Subframe {
   private lastError: string | null = null;
 
   constructor(options: SubframeOptions = {}) {
-    if (liveInstance) {
-      throw new Error("one Subframe instance per page for now");
-    }
-    liveInstance = this;
     this.options = options;
     this.canvas = options.canvas ?? null;
     if (this.canvas) {
@@ -221,12 +219,14 @@ export class Subframe {
       if (this.disposed || this.doc !== doc || this.docSeq !== seq) return;
       await this.registerEmbeddedDocumentFonts(doc);
       if (this.disposed || this.doc !== doc || this.docSeq !== seq) return;
-      this.lastAttachStats = await attachDocument(
+      this.lastAttachStats = await this.attachInstanceDocument(
         doc,
         this.widthValue,
         this.heightValue,
         {
-          timeMs: options.timeMs ?? (this.video ? this.video.currentTime * 1000 : undefined),
+          timeMs:
+            options.timeMs ??
+            (this.video ? this.video.currentTime * 1000 : undefined),
           playbackFps: options.playbackFps ?? 60,
         },
       );
@@ -239,7 +239,9 @@ export class Subframe {
   attachVideo(video: HTMLVideoElement): void {
     this.assertLive();
     if (!hasDom() || !isVideoElement(video)) {
-      throw new Error("Subframe.attachVideo requires a browser HTMLVideoElement");
+      throw new Error(
+        "Subframe.attachVideo requires a browser HTMLVideoElement",
+      );
     }
     if (!this.canvas) {
       throw new Error("Subframe.attachVideo requires a canvas-backed Subframe");
@@ -250,7 +252,10 @@ export class Subframe {
     const onPause = () => this.stopPlayer();
     const onSeeked = () => {
       if (!video.paused) this.startVideoPlayback();
-      else void this.render(video.currentTime * 1000).catch((error) => this.reportError(error));
+      else
+        void this.render(video.currentTime * 1000).catch((error) =>
+          this.reportError(error),
+        );
     };
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
@@ -285,8 +290,18 @@ export class Subframe {
     this.assertLive();
     await this.ready;
     await this.attachPromise;
-    if (!this.doc) throw new Error("Subframe.frame requires setDocument() first");
-    const result = await renderFrame(
+    if (!this.doc)
+      throw new Error("Subframe.frame requires setDocument() first");
+    if (this.workerPool) {
+      const rendered = await this.workerPool.render(
+        this.doc,
+        timeMs,
+        this.widthValue,
+        this.heightValue,
+      );
+      return this.wrapResult(rendered.result, rendered.release);
+    }
+    const result = await renderFrameDirect(
       this.doc,
       timeMs,
       this.widthValue,
@@ -313,8 +328,9 @@ export class Subframe {
       backend: this.backendKind,
       backendStats: this.backend?.stats?.() ?? null,
       player: this.player?.stats() ?? null,
-      pipeline: getFramePipelineStats(),
-      workerPool: getWorkerPoolStats(),
+      pipeline:
+        this.workerPool?.pipelineStats() ?? emptyInstancePipelineStats(),
+      workerPool: this.workerPool?.stats() ?? emptyInstanceWorkerPoolStats(),
       eventLayerCache: getEventLayerCacheStats(),
       memory: getMemoryStats(),
       fonts: {
@@ -342,28 +358,25 @@ export class Subframe {
     }
     this.backend = null;
     this.backendKind = "headless";
-    if (this.installedFontResolver) setFontResolver(null);
     this.clearFontSources(this.embeddedFontCleanups);
     this.clearFontSources(this.providedFontCleanups);
     for (const cleanup of this.resolvedFontCleanups.values()) cleanup();
     this.resolvedFontCleanups.clear();
-    if (this.installedWorkerSource) setWorkerSource(null);
+    this.fontRegistry.clear();
+    this.workerPool?.dispose();
+    this.workerPool = null;
     this.disposeInlineWorkerSource?.();
     this.disposeInlineWorkerSource = null;
-    setWorkerPool(false);
-    resetFramePipeline();
-    clearEventLayerCache();
-    clearRasterCaches();
-    if (liveInstance === this) liveInstance = null;
   }
 
   private async init(): Promise<void> {
     try {
       await this.installFonts();
-      this.installWorkers();
       if (this.canvas) await this.initBackend();
+      this.installWorkers();
     } catch (err) {
-      if (liveInstance === this) liveInstance = null;
+      this.workerPool?.dispose();
+      this.workerPool = null;
       throw err;
     }
   }
@@ -392,47 +405,51 @@ export class Subframe {
       for (const name of Object.keys(fonts)) {
         const source = fonts[name]! as FontSource;
         this.legacyProvidedFonts.set(name.toLowerCase(), source);
-        this.providedFontCleanups.push(registerScopedFontSource(name, source));
+        this.providedFontCleanups.push(
+          this.fontRegistry.registerScoped(name, source),
+        );
       }
     }
   }
 
   private installFontResolver(): void {
-    setFontResolver(async (name) => {
-      const key = name.toLowerCase();
-      const embedded = this.embeddedFonts.get(key);
-      if (embedded) {
-        this.fontStats.embedded++;
-        return embedded;
-      }
-      const provided = this.providedFonts.get(key);
-      if (provided) {
-        this.fontStats.provided++;
-        return provided;
-      }
-      const legacyProvided = this.legacyProvidedFonts.get(key);
-      if (legacyProvided) {
-        this.fontStats.provided++;
-        return legacyProvided;
-      }
-      if (this.options.fontResolver) {
-        const resolved = await this.options.fontResolver(name);
-        if (resolved) {
-          this.fontStats.resolver++;
-          this.registerResolvedFontSource(name, resolved);
-          return resolved;
+    this.fontRegistry.setResolver(
+      async (name) => {
+        const key = name.toLowerCase();
+        const embedded = this.embeddedFonts.get(key);
+        if (embedded) {
+          this.fontStats.embedded++;
+          return embedded;
         }
-      }
-      const local = await resolveLocalFontBuffer(name);
-      if (local) {
-        this.fontStats.local++;
-        this.registerResolvedFontSource(name, local);
-        return local;
-      }
-      this.fontStats.misses++;
-      return null;
-    }, { beforeRegistered: true });
-    this.installedFontResolver = true;
+        const provided = this.providedFonts.get(key);
+        if (provided) {
+          this.fontStats.provided++;
+          return provided;
+        }
+        const legacyProvided = this.legacyProvidedFonts.get(key);
+        if (legacyProvided) {
+          this.fontStats.provided++;
+          return legacyProvided;
+        }
+        if (this.options.fontResolver) {
+          const resolved = await this.options.fontResolver(name);
+          if (resolved) {
+            this.fontStats.resolver++;
+            this.registerResolvedFontSource(name, resolved);
+            return resolved;
+          }
+        }
+        const local = await resolveLocalFontBuffer(name);
+        if (local) {
+          this.fontStats.local++;
+          this.registerResolvedFontSource(name, local);
+          return local;
+        }
+        this.fontStats.misses++;
+        return null;
+      },
+      { beforeRegistered: true },
+    );
   }
 
   private registerOwnedFontNames(
@@ -446,14 +463,17 @@ export class Subframe {
     for (let i = 0; i < names.length; i++) {
       const name = names[i]!;
       target.set(name.toLowerCase(), bytes);
-      cleanups.push(registerScopedFontSource(name, bytes));
+      cleanups.push(this.fontRegistry.registerScoped(name, bytes));
     }
   }
 
   private registerResolvedFontSource(name: string, source: FontSource): void {
     const key = name.toLowerCase();
     if (this.resolvedFontCleanups.has(key)) return;
-    this.resolvedFontCleanups.set(key, registerScopedFontSource(name, source));
+    this.resolvedFontCleanups.set(
+      key,
+      this.fontRegistry.registerScoped(name, source),
+    );
   }
 
   private clearFontSources(cleanups: Array<() => void>): void {
@@ -461,7 +481,9 @@ export class Subframe {
     cleanups.length = 0;
   }
 
-  private async registerEmbeddedDocumentFonts(doc: SubtitleDocument): Promise<void> {
+  private async registerEmbeddedDocumentFonts(
+    doc: SubtitleDocument,
+  ): Promise<void> {
     this.clearFontSources(this.embeddedFontCleanups);
     this.embeddedFonts.clear();
     this.fontStats.embeddedFonts = 0;
@@ -488,21 +510,88 @@ export class Subframe {
     }
   }
 
+  private async attachInstanceDocument(
+    doc: SubtitleDocument,
+    width: number | undefined,
+    height: number | undefined,
+    options: SubframeDocumentOptions,
+  ): Promise<AttachDocumentStats> {
+    bindFontRegistry(doc, this.fontRegistry);
+    let firstTime = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < doc.events.length; i++) {
+      const start = doc.events[i]!.start;
+      if (Number.isFinite(start) && start < firstTime) firstTime = start;
+    }
+    const timeMs =
+      options.timeMs ?? (Number.isFinite(firstTime) ? firstTime : 0);
+    const totalStart = performance.now();
+    const fontStart = totalStart;
+    const fonts: Promise<unknown>[] = [];
+    for (const style of doc.styles.values()) {
+      const boldValue = style.bold;
+      const bold =
+        typeof boldValue === "number" ? boldValue !== 0 : !!boldValue;
+      fonts.push(
+        this.fontRegistry
+          .getFontForStyle(style.fontName, bold, !!style.italic)
+          .catch(() => null),
+      );
+    }
+    await Promise.all(fonts);
+    const fontMs = performance.now() - fontStart;
+    const frame = frameContextFromDocument(doc, timeMs, width, height);
+
+    if (this.workerPool) {
+      const attached = await this.workerPool.attach(
+        doc,
+        timeMs,
+        frame.width,
+        frame.height,
+        options.playbackFps ?? 60,
+      );
+      return {
+        timeMs,
+        totalMs: performance.now() - totalStart,
+        fontMs,
+        workerMs: attached.workerMs,
+        prepareMs: attached.prepareMs,
+        primeMs: attached.primeMs,
+        primedRingFrames: attached.primed,
+        workers: this.workerPool.workerCount,
+      };
+    }
+
+    const prepareStart = performance.now();
+    await renderFrameDirect(doc, timeMs, frame.width, frame.height);
+    return {
+      timeMs,
+      totalMs: performance.now() - totalStart,
+      fontMs,
+      workerMs: 0,
+      prepareMs: performance.now() - prepareStart,
+      primeMs: 0,
+      primedRingFrames: 0,
+      workers: 0,
+    };
+  }
+
   private installWorkers(): void {
     const workers = this.options.workers !== false;
-    setWorkerPool(workers);
     if (!workers) return;
+    let source: string | (() => Worker) | undefined;
     if (this.options.workerUrl) {
-      setWorkerSource(this.options.workerUrl);
-      this.installedWorkerSource = true;
-      return;
+      source = this.options.workerUrl;
+    } else if (hasDom() && INLINED_WORKER_CODE) {
+      const inline = makeInlineWorkerFactory(INLINED_WORKER_CODE);
+      source = inline.create;
+      this.disposeInlineWorkerSource = inline.dispose;
     }
-    if (hasDom() && INLINED_WORKER_CODE) {
-      const source = makeInlineWorkerFactory(INLINED_WORKER_CODE);
-      setWorkerSource(source.create);
-      this.disposeInlineWorkerSource = source.dispose;
-      this.installedWorkerSource = true;
-    }
+    this.workerPool = new InstanceWorkerPool({
+      source,
+      workerCount: this.options.workerCount,
+      fontRegistry: this.fontRegistry,
+      gpuFiltersEnabled: this.backendKind === "webgpu",
+    });
   }
 
   private async initBackend(): Promise<void> {
@@ -523,7 +612,10 @@ export class Subframe {
     }
     if (requested === "webgl" || requested === "auto") {
       try {
-        this.backend = createWebGLBackend({ canvas: this.canvas!, preferWebGL2: true });
+        this.backend = createWebGLBackend({
+          canvas: this.canvas!,
+          preferWebGL2: true,
+        });
         this.backendKind = "webgl";
         this.backend.resize(
           this.widthValue ?? this.canvas!.width,
@@ -541,11 +633,13 @@ export class Subframe {
 
   private startVideoPlayback(): void {
     if (!this.video || !this.doc || this.disposed) return;
-    void this.ready.then(async () => {
-      if (!this.video || !this.doc || this.disposed) return;
-      await this.attachPromise;
-      this.ensurePlayer().start(this.doc, this.video.currentTime * 1000);
-    }).catch((error) => this.reportError(error));
+    void this.ready
+      .then(async () => {
+        if (!this.video || !this.doc || this.disposed) return;
+        await this.attachPromise;
+        this.ensurePlayer().start(this.doc, this.video.currentTime * 1000);
+      })
+      .catch((error) => this.reportError(error));
   }
 
   private ensurePlayer(): RenderAheadPlayer<InternalFrame> {
@@ -559,7 +653,7 @@ export class Subframe {
         height: () => this.heightValue ?? this.canvas?.height ?? 1,
         now: nowMs,
         requestFrame: (cb) => this.requestVideoOrDisplayFrame(cb),
-        onSeek: () => resetFramePipeline(),
+        onSeek: () => this.workerPool?.resetCadence(),
         onError: (error) => this.reportError(error),
       },
       { fps: 60 },
@@ -573,10 +667,7 @@ export class Subframe {
     const video = this.video as
       | (HTMLVideoElement & {
           requestVideoFrameCallback?: (
-            cb: (
-              now: number,
-              metadata: { mediaTime?: number },
-            ) => void,
+            cb: (now: number, metadata: { mediaTime?: number }) => void,
           ) => number;
         })
       | null;
@@ -594,7 +685,10 @@ export class Subframe {
     this.releaseLastPresented();
   }
 
-  private wrapResult(result: RenderResult): InternalFrame {
+  private wrapResult(
+    result: RenderResult,
+    releaseResult: () => void = () => releaseRenderResult(result),
+  ): InternalFrame {
     let released = false;
     const frame: InternalFrame = {
       result,
@@ -604,7 +698,7 @@ export class Subframe {
       release: () => {
         if (released) return;
         released = true;
-        releaseRenderResult(result);
+        releaseResult();
       },
     };
     return frame;
@@ -628,7 +722,11 @@ export class Subframe {
     previous?.release();
   }
 
-  private compositeCpu(layers: BitmapLayer[], width: number, height: number): void {
+  private compositeCpu(
+    layers: BitmapLayer[],
+    width: number,
+    height: number,
+  ): void {
     const ctx = this.ctx2d;
     if (!ctx) return;
     const imageData = this.getFrameBuffer(ctx, width, height);
@@ -642,7 +740,7 @@ export class Subframe {
         const idx = row + x * 4;
         const alpha = data[idx + 3]!;
         if (alpha) {
-          const inv = Math.floor(((255 << 16) / alpha) + 1);
+          const inv = Math.floor((255 << 16) / alpha + 1);
           const offs = 1 << 15;
           data[idx + 0] = (data[idx + 0]! * inv + offs) >> 16;
           data[idx + 1] = (data[idx + 1]! * inv + offs) >> 16;
@@ -659,7 +757,11 @@ export class Subframe {
     width: number,
     height: number,
   ): ImageData {
-    if (!this.frameImageData || this.frameW !== width || this.frameH !== height) {
+    if (
+      !this.frameImageData ||
+      this.frameW !== width ||
+      this.frameH !== height
+    ) {
       this.frameImageData = ctx.createImageData(width, height);
       this.frameData = this.frameImageData.data;
       this.frameW = width;
@@ -704,10 +806,14 @@ export class Subframe {
         const dg = data[di + 1]!;
         const db = data[di + 2]!;
         const da = data[di + 3]!;
-        data[di + 0] = ((k * r + (255 * 255 - k) * dr + rounding) / (255 * 255)) | 0;
-        data[di + 1] = ((k * g + (255 * 255 - k) * dg + rounding) / (255 * 255)) | 0;
-        data[di + 2] = ((k * b + (255 * 255 - k) * db + rounding) / (255 * 255)) | 0;
-        data[di + 3] = ((k * 255 + (255 * 255 - k) * da + rounding) / (255 * 255)) | 0;
+        data[di + 0] =
+          ((k * r + (255 * 255 - k) * dr + rounding) / (255 * 255)) | 0;
+        data[di + 1] =
+          ((k * g + (255 * 255 - k) * dg + rounding) / (255 * 255)) | 0;
+        data[di + 2] =
+          ((k * b + (255 * 255 - k) * db + rounding) / (255 * 255)) | 0;
+        data[di + 3] =
+          ((k * 255 + (255 * 255 - k) * da + rounding) / (255 * 255)) | 0;
       }
     }
   }

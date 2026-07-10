@@ -5,6 +5,7 @@ Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works to
 
 ## v0 scope (must-have)
 - [x] Format-agnostic rendering API that accepts Subforge `SubtitleDocument`.
+- [x] Multiple simultaneous `Subframe` facades with instance-owned scheduler state, font resolution, worker pools, cadence, and returned-frame lifetime. The low-level functional API remains a separate shared-runtime compatibility surface.
 - [ ] Prove 1:1 parity vs libass for every advertised ASS/SSA feature and fixture.
 - [x] Render directly from Subforge events/segments (no extra abstraction layer).
 - [x] Core ASS layout + tag engine: \fs, \fscx, \fscy, \fsp, \bord, \shad, \blur, \be, \c, \alpha, \an, \pos, \move, \org, \q.
@@ -21,7 +22,6 @@ Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works to
 - [ ] Full ASS feature coverage outside the scope list.
 - [ ] Multiple build targets or separate browser/Bun builds.
 - [ ] Heavy optional dependencies or native addons.
-- [ ] Multiple simultaneous `Subframe` facades in one JavaScript realm. The v0 facade enforces one live instance; making scheduler caches, font resolution, and worker pools instance-owned is a later release boundary, not a hidden compatibility promise.
 
 ## Constraints
 - [x] Single build that runs in browser and Bun (font URLs required in browser).
@@ -66,6 +66,10 @@ After making the facade warm the requested initial media time and using the exis
 
 The smoke fixture is split into seven one-event ASS files under `test/fixtures/ass/parity-smoke-events`. The manifests use repository-pinned Lato, Amiri, Noto Sans Hebrew, and a glyph-subset Noto Sans SC from `test/fixtures/fonts/parity`; their source revision, licenses, generation command, and SHA-256 values are recorded beside the files.
 
-The earliest divergence is scan conversion, before outline, shadow, blur, or compositing. A straight-edged ASS drawing has the expected placement but differs by up to 5 alpha levels (mean absolute alpha error 0.00223 over the 640x360 frame); the curved drawing raises that to 40 (mean 0.00645). For `stage_00_plain` text at 1000ms, libass and Subframe have the same alpha bounds (111x29 at x=81, y=94) and best translation (0,0), but 692 pixels differ in alpha coverage (mean 0.0615; max 94). The current text-shaper scan converter is FreeType-style, while libass uses its own tiled fixed-point rasterizer. Filters are therefore being compared on already-different input masks; this gate must not be described as filter parity until the scan converter itself matches.
+The first implementation divergence is now inside mask coverage, not font selection or layout placement. Text-shaper has a separate opt-in libass 16x16 tiled WebAssembly rasterizer (distinct from its existing FreeType-style `fill-wasm` kernel) and a typed FreeType-real-dimension outline API. The straight-edged drawing stage is byte-exact; the curved drawing is within max 2 alpha. `stage_00_plain` now differs at 0.094% of frame pixels (mean 0.027, max 66), down from 0.276% before outline extraction and transform quantization were matched. Outline and filter stages remain red because they consume those non-identical masks; no filter-parity claim is made yet.
+
+The one-event smoke gate remains intentionally strict. Current differing-pixel rates are 0.141% filters, 0.178-0.248% transform, 0.068% karaoke, 0.059% clip, 0-0.100% fade/wrap, 0.237-0.476% bidi, and 1.210-2.646% CJK wrap. CJK layout is the largest remaining surface; Latin mask coverage and the outline stroker are the next raster stages.
 
 The corresponding 8-second smoothness rerun measured display-interval standard deviation 6.72ms reactive vs 6.65ms render-ahead, p95 18.40ms vs 26.40ms, and max 77.60ms vs 31.10ms. Render-ahead materially caps the worst stall and holds about 59.9fps, but does not yet improve p95 cadence.
+
+Instance-runtime verification after timestamp canonicalization, static-frame arena dedup, and 250ms boundary lookahead (same machine/browser/workload, 300 Beastars class-path frames, eight workers): 60.2fps; render p50 0.06ms, p95 0.43ms, p99 2.98ms, max 173.25ms; render plus backend p50 0.63ms, p95 17.65ms, p99 33.36ms, max 200.53ms. One of 300 render calls exceeded 16.67ms. The previous 30.11ms p95 regression is closed, while rare cold/GPU/driver spikes keep the overall p99 target open.
