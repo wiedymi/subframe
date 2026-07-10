@@ -44,7 +44,7 @@ const sf = new Subframe({
 
 await sf.ready;
 sf.resize(canvas.width, canvas.height);
-await sf.setDocument(doc);
+await sf.setDocument(doc, { timeMs: video.currentTime * 1000 });
 
 // Manual clock: render and composite one subtitle frame.
 await sf.render(video.currentTime * 1000);
@@ -58,6 +58,7 @@ Notes:
 - `Subframe` starts async initialization in the constructor; `ready`, `render()`, and `frame()` queue behind it.
 - Workers default on. Package builds embed an inline module worker; strict CSP pages can serve the exported `subframe/worker-entry.js` asset from their own origin and pass that URL through `workerUrl`, or use `workers: false` to stay single-threaded.
 - Only one live `Subframe` instance is supported per page for now because the renderer core owns module-global caches and worker-pool state.
+- Pass the expected initial media time to `setDocument()` when starting deep in a script. This warms the actual playback window instead of the first subtitle event. If a video is already attached, its current time is used automatically.
 - Seeking needs no special handling — jump the time you pass to `render()` or the attached video; the pipeline re-primes itself.
 
 ## Quick start (Bun / offline)
@@ -73,7 +74,7 @@ const sf = new Subframe({
 });
 await sf.ready;
 sf.resize(1920, 1080);
-await sf.setDocument(doc);
+await sf.setDocument(doc, { timeMs: 90_000 });
 
 const { layers, release } = await sf.frame(90_000);
 // Each layer is a grayscale bitmap + premultiply color + placement — composite
@@ -135,7 +136,7 @@ Everything defaults to the fast path; these exist for A/B tests and constrained 
 |---|---|---|
 | `new Subframe({ workerUrl })` / `setWorkerSource(url)` | inline worker / unset | Worker bootstrap. `workerUrl` is the CSP escape hatch; low-level callers can still use `setWorkerSource`. |
 | `setWorkerPool(false)` / `setWorkerCount(n)` | on / auto | Disable or size the pool. |
-| `await sf.setDocument(doc)` / `attachDocument(doc, w, h)` | — | Public facade attach/warmup, or explicit low-level warmup. |
+| `await sf.setDocument(doc, { timeMs, playbackFps })` / `attachDocument(doc, w, h, options)` | first event / 60 fps | Public facade attach/warmup, or explicit low-level warmup. Set `timeMs` when playback starts mid-script. |
 | `setMemoryBudget(bytes)` | ~120 MB ceilings | Scales all byte-bounded caches proportionally. |
 | `setFrameHybrid(false)` / `setFrameScatter(false)` | on | A/B switches for the frame pipeline engines. |
 | `releaseRenderResult(result)` | — | Returns a consumed frame's buffers to the pool (buffering players). |

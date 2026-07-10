@@ -21,6 +21,7 @@ Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works to
 - [ ] Full ASS feature coverage outside the scope list.
 - [ ] Multiple build targets or separate browser/Bun builds.
 - [ ] Heavy optional dependencies or native addons.
+- [ ] Multiple simultaneous `Subframe` facades in one JavaScript realm. The v0 facade enforces one live instance; making scheduler caches, font resolution, and worker pools instance-owned is a later release boundary, not a hidden compatibility promise.
 
 ## Constraints
 - [x] Single build that runs in browser and Bun (font URLs required in browser).
@@ -28,7 +29,7 @@ Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works to
 - [x] No false claims in docs; only document implemented and measured behavior.
 
 ## Success criteria
-- [ ] Pixel-diff parity against libass for a representative test suite. (2026-07-10 smoke: 0/3; mean error 1.051-1.104, pixels over tolerance 2.237%-2.484%)
+- [ ] Pixel-diff parity against libass for a representative test suite. The locked-font one-event and stage gates below remain red.
 - [x] Deterministic output given the same inputs (fonts, timestamps, config).
 - [x] Clear instrumentation for debugging layout/rasterization differences.
 
@@ -58,5 +59,13 @@ Build a subtitle renderer that consumes Subforge `SubtitleDocument` and works to
 These are local snapshots, not cross-machine guarantees. The 60fps and tail-latency checkboxes remain open because the measured tails exceed the targets.
 
 Verification rerun after the lifecycle/API fixes (same date/environment, `Subframe.frame()`, 300 Beastars frames): achieved cadence 60.2fps, total p50 0.48ms, p95 30.11ms, max 352.46ms, with 12/300 pipeline renders above 16.67ms. The variance versus the earlier snapshot reinforces that this is not yet a stable tail-latency pass.
+
+After making the facade warm the requested initial media time and using the existing attach budget to finish upcoming reusable-event work, three 300-frame class-path runs held 60.2fps. Median run statistics were render p50 0.11ms, p95 0.34ms, p99 0.52ms, max 2.12ms; total p50 0.48ms, p95 15.91ms, p99 20.37ms, max 44.46ms. No pipeline render exceeded 16.67ms. Total-frame p99 was still volatile across runs (19.92-39.58ms) because WebGPU filter/composite submissions retain hardware/driver tails, so the overall tail target remains open.
+
+## Locked-font parity isolation (2026-07-10)
+
+The smoke fixture is split into seven one-event ASS files under `test/fixtures/ass/parity-smoke-events`. The manifests use repository-pinned Lato, Amiri, Noto Sans Hebrew, and a glyph-subset Noto Sans SC from `test/fixtures/fonts/parity`; their source revision, licenses, generation command, and SHA-256 values are recorded beside the files.
+
+The earliest divergence is scan conversion, before outline, shadow, blur, or compositing. A straight-edged ASS drawing has the expected placement but differs by up to 5 alpha levels (mean absolute alpha error 0.00223 over the 640x360 frame); the curved drawing raises that to 40 (mean 0.00645). For `stage_00_plain` text at 1000ms, libass and Subframe have the same alpha bounds (111x29 at x=81, y=94) and best translation (0,0), but 692 pixels differ in alpha coverage (mean 0.0615; max 94). The current text-shaper scan converter is FreeType-style, while libass uses its own tiled fixed-point rasterizer. Filters are therefore being compared on already-different input masks; this gate must not be described as filter parity until the scan converter itself matches.
 
 The corresponding 8-second smoothness rerun measured display-interval standard deviation 6.72ms reactive vs 6.65ms render-ahead, p95 18.40ms vs 26.40ms, and max 77.60ms vs 31.10ms. Render-ahead materially caps the worst stall and holds about 59.9fps, but does not yet improve p95 cadence.

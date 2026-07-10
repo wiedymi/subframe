@@ -54,6 +54,13 @@ export type SubframeOptions = {
   onError?: (error: unknown) => void;
 };
 
+export type SubframeDocumentOptions = {
+  /** Media time to warm before the first frame. Defaults to the attached video's current time, then the first event. */
+  timeMs?: number;
+  /** Expected playback cadence used to seed render-ahead. Defaults to 60. */
+  playbackFps?: number;
+};
+
 export type SubframeFrame = {
   layers: BitmapLayer[];
   frame: FrameContext;
@@ -203,7 +210,10 @@ export class Subframe {
     this.ready = this.init();
   }
 
-  setDocument(doc: SubtitleDocument): Promise<void> {
+  setDocument(
+    doc: SubtitleDocument,
+    options: SubframeDocumentOptions = {},
+  ): Promise<void> {
     this.assertLive();
     this.doc = doc;
     const seq = ++this.docSeq;
@@ -215,7 +225,10 @@ export class Subframe {
         doc,
         this.widthValue,
         this.heightValue,
-        { playbackFps: 60 },
+        {
+          timeMs: options.timeMs ?? (this.video ? this.video.currentTime * 1000 : undefined),
+          playbackFps: options.playbackFps ?? 60,
+        },
       );
       if (this.video && !this.video.paused) this.startVideoPlayback();
     });

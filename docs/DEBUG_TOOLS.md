@@ -10,6 +10,7 @@ Only tools that currently exist are listed here.
 - `tools/trace/render_event.ts`: targeted event render/trace.
 - `tools/trace/trace_diff.ts` and `move_rotate_diff.ts`: locate the first trace or transform mismatch.
 - `tools/parity/sweep.ts`: multi-frame libass comparison.
+- `tools/parity/analyze_pair.ts`: alpha bounds, best integer translation, and coverage-error statistics for a libass/Subframe PNG pair.
 - `tools/bench/*`: Bun micro, fixture, reference, baseline-update, and comparison harnesses.
 - `tools/gpu-headless/run-headless.ts`: real-WebGPU CPU/GPU byte-equality gate.
 - `tools/gpu-headless/run-worker-check.ts`: browser worker bootstrap check.

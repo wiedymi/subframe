@@ -27,6 +27,8 @@ npm pack --dry-run
 bun run test:golden:preflight
 bun run test:golden
 bun run test:golden:smoke
+bun run test:golden:smoke:events
+bun run test:golden:stages
 bun run tools/parity/sweep.ts
 bun run tools/gpu-headless/run-headless.ts
 bun run tools/gpu-headless/run-worker-check.ts
@@ -39,7 +41,10 @@ Focused diff, trace, baseline, and report commands are listed by `package.json` 
 
 - Small tag regressions live as test cases; larger ASS inputs live in `test/fixtures/ass`.
 - `test/manifest.json` pins viewport, timestamps, renderer commands, and diff thresholds.
+- `test/parity-smoke-manifest.json` isolates every smoke event; `test/parity-stages-manifest.json` adds filters one stage at a time.
+- PNG comparisons use premultiplied RGBA, matching the renderer/compositor contract; straight-alpha RGB hidden behind zero coverage is not counted as a visible 255-level error.
 - Strict comparisons must use the same font bytes. Machine-local fallback is useful for interactive rendering but is not a reproducible golden-test input.
+- The parity manifests use the OFL-licensed, checksum-documented bundle in `test/fixtures/fonts/parity`; do not replace it with system fonts.
 - Third-party benchmark assets are repository test data and are excluded from the npm package. Their provenance and known license status are recorded next to the fixture bundle.
 
 ## Output policy

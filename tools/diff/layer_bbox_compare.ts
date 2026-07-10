@@ -80,7 +80,7 @@ function computeBBoxInRegion(png: PNG, x0: number, y0: number, width: number, he
 async function renderLibass(manifest: Manifest, ass: string, timeMs: number, width: number, height: number, outPath: string, fontsDir?: string) {
   mkdirSync(dirname(outPath), { recursive: true });
   const args = ["--ass", ass, "--time", String(timeMs), "--w", String(width), "--h", String(height), "--out", outPath];
-  if (fontsDir) args.splice(args.length - 1, 0, "--fonts", fontsDir);
+  if (fontsDir) args.splice(args.length - 2, 0, "--fonts", fontsDir);
   const proc = Bun.spawn({ cmd: [...manifest.renderers.libass.cmd, ...args], stdout: "inherit", stderr: "inherit" });
   return proc.exited;
 }

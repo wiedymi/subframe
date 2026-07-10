@@ -329,7 +329,7 @@ async function runOne(
     : null;
   if (sf) {
     sf.resize(W, H);
-    sf.setDocument(doc);
+    sf.setDocument(doc, { timeMs: fixture.t0, playbackFps: 60 });
     await sf.ready;
   }
 

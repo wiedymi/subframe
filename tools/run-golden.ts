@@ -4,7 +4,7 @@ import { diffPng } from "./diff/pngdiff";
 
 type Manifest = {
   viewport: { width: number; height: number };
-  fontsDir: string;
+  fontsDir?: string;
   threshold?: { max: number; mean: number; pct: number };
   renderers: {
     libass: { cmd: string[] };
@@ -14,6 +14,7 @@ type Manifest = {
     id: string;
     ass: string;
     timestampsMs: number[];
+    fontsDir?: string;
     threshold?: { max: number; mean: number; pct: number };
   }>;
 };
@@ -53,7 +54,6 @@ async function main() {
 
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
   const { width, height } = manifest.viewport;
-  const fontsDir = fontsOverride ?? manifest.fontsDir;
   const defaultThreshold = manifest.threshold || { max: 2, mean: 0.5, pct: 0.1 };
   const caseFilter = new Set(caseArgs.flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean)));
   const timeFilter = new Set(
@@ -87,6 +87,7 @@ async function main() {
 
   for (const c of manifest.cases) {
     if (caseFilter.size > 0 && !caseFilter.has(c.id)) continue;
+    const fontsDir = fontsOverride ?? c.fontsDir ?? manifest.fontsDir;
     const threshold = c.threshold || defaultThreshold;
     const timestamps =
       timeFilter.size > 0 ? c.timestampsMs.filter((t) => timeFilter.has(t)) : c.timestampsMs;

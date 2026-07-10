@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { PNG } from "pngjs";
 
 type DiffStats = {
+  space: "premultiplied-rgba";
   width: number;
   height: number;
   maxError: number;
@@ -11,6 +12,10 @@ type DiffStats = {
   pctOver: number;
   tolerance: number;
 };
+
+function premultiply(channel: number, alpha: number): number {
+  return Math.floor((channel * alpha + 127) / 255);
+}
 
 function readPng(path: string) {
   const buf = readFileSync(path);
@@ -41,10 +46,22 @@ export function diffPng(
   for (let y = 0; y < a.height; y++) {
     for (let x = 0; x < a.width; x++) {
       const i = (y * a.width + x) * 4;
-      const dr = Math.abs(a.data[i + 0] - b.data[i + 0]);
-      const dg = Math.abs(a.data[i + 1] - b.data[i + 1]);
-      const db = Math.abs(a.data[i + 2] - b.data[i + 2]);
-      const da = Math.abs(a.data[i + 3] - b.data[i + 3]);
+      const aa = a.data[i + 3]!;
+      const ba = b.data[i + 3]!;
+      // PNG stores straight alpha, but Subframe and libass both composite in
+      // premultiplied space. RGB in a fully transparent (or barely covered)
+      // edge pixel is not visible and can explode a meaningful one-level mask
+      // difference into a false 255-channel failure after unpremultiplication.
+      const dr = Math.abs(
+        premultiply(a.data[i + 0]!, aa) - premultiply(b.data[i + 0]!, ba),
+      );
+      const dg = Math.abs(
+        premultiply(a.data[i + 1]!, aa) - premultiply(b.data[i + 1]!, ba),
+      );
+      const db = Math.abs(
+        premultiply(a.data[i + 2]!, aa) - premultiply(b.data[i + 2]!, ba),
+      );
+      const da = Math.abs(aa - ba);
       const d = Math.max(dr, dg, db, da);
       if (d > maxError) maxError = d;
       sum += d;
@@ -58,6 +75,7 @@ export function diffPng(
   }
 
   const stats: DiffStats = {
+    space: "premultiplied-rgba",
     width: a.width,
     height: a.height,
     maxError,

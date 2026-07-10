@@ -1,0 +1,93 @@
+{
+  "viewport": {
+    "width": 1920,
+    "height": 1080
+  },
+  "fontsDir": "test/fixtures/fonts/parity/files",
+  "threshold": {
+    "max": 2,
+    "mean": 0.5,
+    "pct": 0.1
+  },
+  "renderers": {
+    "libass": {
+      "cmd": [
+        "/usr/bin/env",
+        "DYLD_LIBRARY_PATH=refs/libass/libass/.libs",
+        "tools/ref/render_libass"
+      ]
+    },
+    "subframe": {
+      "cmd": [
+        "bun",
+        "run",
+        "tools/ref/render_subframe.ts"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "00_filters",
+      "ass": "test/fixtures/ass/parity-smoke-events/00_filters.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "01_transform",
+      "ass": "test/fixtures/ass/parity-smoke-events/01_transform.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "02_karaoke",
+      "ass": "test/fixtures/ass/parity-smoke-events/02_karaoke.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "03_clip",
+      "ass": "test/fixtures/ass/parity-smoke-events/03_clip.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "04_fade_wrap",
+      "ass": "test/fixtures/ass/parity-smoke-events/04_fade_wrap.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "05_bidi",
+      "ass": "test/fixtures/ass/parity-smoke-events/05_bidi.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    },
+    {
+      "id": "06_cjk_wrap",
+      "ass": "test/fixtures/ass/parity-smoke-events/06_cjk_wrap.ass",
+      "timestampsMs": [
+        0,
+        1000,
+        2000
+      ]
+    }
+  ]
+}

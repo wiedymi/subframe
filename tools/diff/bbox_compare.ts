@@ -9,7 +9,7 @@ type Manifest = {
     libass: { cmd: string[] };
     subframe: { cmd: string[] };
   };
-  cases: Array<{ id: string; ass: string; timestampsMs: number[] }>;
+  cases: Array<{ id: string; ass: string; timestampsMs: number[]; fontsDir?: string }>;
 };
 
 type BBox = { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number };
@@ -87,7 +87,7 @@ async function renderIfNeeded(
   mkdirSync(dirname(outPath), { recursive: true });
   const args = ["--ass", ass, "--time", String(timeMs), "--w", String(width), "--h", String(height), "--out", outPath];
   if (fontsDir) {
-    args.splice(args.length - 1, 0, "--fonts", fontsDir);
+    args.splice(args.length - 2, 0, "--fonts", fontsDir);
   }
   return await run(cmd, args);
 }
@@ -104,7 +104,6 @@ if (import.meta.main) {
 
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
   const { width, height } = manifest.viewport;
-  const fontsDir = fontsOverride ?? manifest.fontsDir;
   const caseFilter = new Set(caseArgs.flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean)));
   const timeFilter = new Set(
     timeArgs.flatMap((v) => v.split(",").map((s) => s.trim()).filter(Boolean).map((t) => Number(t)))
@@ -122,6 +121,7 @@ if (import.meta.main) {
 
   for (const c of manifest.cases) {
     if (caseFilter.size > 0 && !caseFilter.has(c.id)) continue;
+    const fontsDir = fontsOverride ?? c.fontsDir ?? manifest.fontsDir;
     const timestamps = timeFilter.size > 0 ? c.timestampsMs.filter((t) => timeFilter.has(t)) : c.timestampsMs;
     if (timestamps.length === 0) continue;
 

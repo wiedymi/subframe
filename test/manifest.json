@@ -9,6 +9,7 @@
     {
       "id": "parity_smoke",
       "ass": "test/fixtures/ass/parity_smoke.ass",
+      "fontsDir": "test/fixtures/fonts/parity/files",
       "timestampsMs": [0, 1000, 2000]
     },
     {

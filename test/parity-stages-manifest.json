@@ -1,0 +1,86 @@
+{
+  "viewport": {
+    "width": 640,
+    "height": 360
+  },
+  "fontsDir": "test/fixtures/fonts/parity/files",
+  "threshold": {
+    "max": 2,
+    "mean": 0.5,
+    "pct": 0.1
+  },
+  "renderers": {
+    "libass": {
+      "cmd": [
+        "/usr/bin/env",
+        "DYLD_LIBRARY_PATH=refs/libass/libass/.libs",
+        "tools/ref/render_libass"
+      ]
+    },
+    "subframe": {
+      "cmd": [
+        "bun",
+        "run",
+        "tools/ref/render_subframe.ts"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "stage_00_drawing_line",
+      "ass": "test/fixtures/ass/parity-stages/00_drawing_line.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_01_drawing_curve",
+      "ass": "test/fixtures/ass/parity-stages/01_drawing_curve.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_00_plain",
+      "ass": "test/fixtures/ass/parity-stages/00_plain.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_01_outline",
+      "ass": "test/fixtures/ass/parity-stages/01_outline.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_02_shadow",
+      "ass": "test/fixtures/ass/parity-stages/02_shadow.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_03_blur",
+      "ass": "test/fixtures/ass/parity-stages/03_blur.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_04_edge_blur",
+      "ass": "test/fixtures/ass/parity-stages/04_edge_blur.ass",
+      "timestampsMs": [
+        1000
+      ]
+    },
+    {
+      "id": "stage_05_all_filters",
+      "ass": "test/fixtures/ass/parity-stages/05_all_filters.ass",
+      "timestampsMs": [
+        1000
+      ]
+    }
+  ]
+}

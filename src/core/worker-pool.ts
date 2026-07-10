@@ -927,6 +927,10 @@ function syncFontSources(): void {
 const MAX_NO_ENTRY_REASONS = 8;
 const noEntryReasons = new Map<string, number>();
 
+export function pendingWorkerTaskCount(): number {
+  return pending.size;
+}
+
 export function getWorkerPoolStats(): {
   active: boolean;
   workers: number;

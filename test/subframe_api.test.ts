@@ -95,6 +95,18 @@ test("Subframe lifecycle renders and releases a headless frame", async () => {
   }
 });
 
+test("Subframe warms the requested initial media time", async () => {
+  const sf = new Subframe({ workers: false });
+  try {
+    await sf.ready;
+    sf.resize(320, 180);
+    await sf.setDocument(basicDocument(), { timeMs: 1234, playbackFps: 24 });
+    expect(sf.stats().attach?.timeMs).toBe(1234);
+  } finally {
+    sf.dispose();
+  }
+});
+
 test("Subframe registers provided font buffers under extracted names", async () => {
   const bytes = await readFont(LATO_PATH);
   const names = await extractFontNames(bytes);

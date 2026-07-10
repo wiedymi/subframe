@@ -1,9 +1,10 @@
 {
+  "space": "premultiplied-rgba",
   "width": 1920,
   "height": 1080,
   "maxError": 255,
-  "meanError": 1.0894796489197531,
-  "pixelsOver": 50185,
-  "pctOver": 2.420187114197531,
+  "meanError": 1.2188319830246914,
+  "pixelsOver": 45035,
+  "pctOver": 2.171826774691358,
   "tolerance": 1
 }

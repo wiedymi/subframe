@@ -18,6 +18,7 @@ import {
   returnArenaBufferToWorker,
   releaseSabArenaSlotToWorker,
   getFrameThroughputStats,
+  pendingWorkerTaskCount,
   resetFrameThroughputStats,
   type FrameResult,
   type SubsetPart,
@@ -942,6 +943,7 @@ export type AttachDocumentOptions = {
 };
 
 export type AttachDocumentStats = {
+  timeMs: number;
   totalMs: number;
   fontMs: number;
   workerMs: number;
@@ -1171,6 +1173,11 @@ export async function attachDocument(
         );
       }
     }
+    // Spend the existing bounded attach budget on the upcoming reusable event
+    // set as well as whole-frame/boundary work. Without this explicit kick,
+    // starting deep in a dense script can return from attach with idle workers
+    // and then pay a large synchronous scatter several frames into playback.
+    dispatchPrewarmToPool(doc, timeMs, frame.width, frame.height);
     primeRingGridForWarmup(playbackDeltaMs);
     primedRingFrames = seedRing(
       doc,
@@ -1183,7 +1190,9 @@ export async function attachDocument(
     if (warmupBudgetMs > 0) {
       const deadline = performance.now() + warmupBudgetMs;
       while (
-        (boundaryInFlightCount() > 0 || ringHasInFlight()) &&
+        (boundaryInFlightCount() > 0 ||
+          ringHasInFlight() ||
+          pendingWorkerTaskCount() > 0) &&
         performance.now() < deadline
       ) {
         pumpWorkerPool();
@@ -1196,6 +1205,7 @@ export async function attachDocument(
     primeMs = performance.now() - primeStart;
   }
   return {
+    timeMs,
     totalMs: performance.now() - totalStart,
     fontMs,
     workerMs,
